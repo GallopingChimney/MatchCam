@@ -27,6 +27,22 @@ from . import solver as solv
 
 
 # ---------------------------------------------------------------------------
+# Snapshot helpers (for undo/redo)
+# ---------------------------------------------------------------------------
+
+def _snapshot_points(props) -> dict:
+    """Capture all control point values as a dict."""
+    return {name: (getattr(props, name)[0], getattr(props, name)[1])
+            for name in CONTROL_POINT_NAMES}
+
+
+def _restore_snapshot(props, snap: dict):
+    """Restore all control point values from a snapshot."""
+    for name, val in snap.items():
+        setattr(props, name, val)
+
+
+# ---------------------------------------------------------------------------
 # Solver integration
 # ---------------------------------------------------------------------------
 
@@ -133,7 +149,10 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
     _dragging: bool = False
     _drag_idx: int = -1
     _drag_start_value: tuple[float, float] = (0, 0)
+    _drag_start_screen: tuple[float, float] = (0, 0)
     _hover_idx: int = -1
+    _undo_stack: list = []
+    _redo_stack: list = []
 
     def invoke(self, context, event):
         if context.area.type != 'VIEW_3D':
@@ -142,6 +161,10 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
         register_draw_handler()
 
         context.window_manager.modal_handler_add(self)
+
+        # Initialize undo stack with current state
+        self._undo_stack = [_snapshot_points(context.scene.matchcam)]
+        self._redo_stack = []
 
         # Run solver once on start
         _run_solver(context.scene)
@@ -186,6 +209,18 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     # Clamp to 0-1
                     nx = max(0.0, min(1.0, nx))
                     ny = max(0.0, min(1.0, ny))
+
+                    # Shift+drag: constrain to horizontal or vertical
+                    if event.shift:
+                        dx = abs(mx - self._drag_start_screen[0])
+                        dy = abs(my - self._drag_start_screen[1])
+                        if dx >= dy:
+                            # Constrain to horizontal (keep original Y)
+                            ny = self._drag_start_value[1]
+                        else:
+                            # Constrain to vertical (keep original X)
+                            nx = self._drag_start_value[0]
+
                     setattr(props, name, (nx, ny))
 
                     # Run solver
@@ -219,11 +254,15 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     self._drag_idx = hit
                     val = getattr(props, name)
                     self._drag_start_value = (val[0], val[1])
+                    self._drag_start_screen = (mx, my)
                     return {'RUNNING_MODAL'}
                 return {'PASS_THROUGH'}
 
             elif event.value == 'RELEASE':
                 if self._dragging:
+                    # Push undo snapshot after completing a drag
+                    self._undo_stack.append(_snapshot_points(props))
+                    self._redo_stack.clear()
                     self._dragging = False
                     self._drag_idx = -1
                     return {'RUNNING_MODAL'}
@@ -231,7 +270,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
 
         elif event.type == 'RIGHTMOUSE' and event.value == 'PRESS':
             if self._dragging and self._drag_idx >= 0:
-                # Cancel drag - restore original value
+                # Cancel drag - restore original value (no undo push)
                 name = CONTROL_POINT_NAMES[self._drag_idx]
                 setattr(props, name, self._drag_start_value)
                 _run_solver(scene)
@@ -243,7 +282,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
 
         elif event.type == 'ESC' and event.value == 'PRESS':
             if self._dragging and self._drag_idx >= 0:
-                # Cancel drag
+                # Cancel drag - restore original value (no undo push)
                 name = CONTROL_POINT_NAMES[self._drag_idx]
                 setattr(props, name, self._drag_start_value)
                 _run_solver(scene)
@@ -252,6 +291,27 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 self._tag_redraw(context)
                 return {'RUNNING_MODAL'}
             return {'PASS_THROUGH'}
+
+        # --- Undo / Redo ---
+        elif event.type == 'Z' and event.value == 'PRESS' and event.ctrl:
+            if event.shift:
+                # Redo
+                if self._redo_stack:
+                    self._undo_stack.append(_snapshot_points(props))
+                    snap = self._redo_stack.pop()
+                    _restore_snapshot(props, snap)
+                    _run_solver(scene)
+                    self._tag_redraw(context)
+                return {'RUNNING_MODAL'}
+            else:
+                # Undo
+                if len(self._undo_stack) > 1:
+                    self._redo_stack.append(self._undo_stack.pop())
+                    snap = self._undo_stack[-1]
+                    _restore_snapshot(props, snap)
+                    _run_solver(scene)
+                    self._tag_redraw(context)
+                return {'RUNNING_MODAL'}
 
         return {'PASS_THROUGH'}
 
