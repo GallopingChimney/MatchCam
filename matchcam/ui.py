@@ -32,6 +32,18 @@ class MATCHCAM_PT_main(bpy.types.Panel):
 
         layout.separator()
 
+        # Mode: 2VP / 3VP
+        box = layout.box()
+        box.label(text="Mode", icon='VIEW_CAMERA')
+        row = box.row(align=True)
+        row.prop(props, "mode", expand=True)
+
+        if props.mode == '3VP':
+            box.label(text="VP3 lines: blue", icon='INFO')
+            box.label(text="Derives principal point + camera shift")
+
+        layout.separator()
+
         # Axis assignment
         box = layout.box()
         box.label(text="Axis Assignment", icon='ORIENTATION_GLOBAL')
@@ -45,13 +57,14 @@ class MATCHCAM_PT_main(bpy.types.Panel):
 
         layout.separator()
 
-        # Principal point
-        box = layout.box()
-        box.prop(props, "use_custom_pp", text="Custom Principal Point")
-        if props.use_custom_pp:
-            row = box.row()
-            row.prop(props, "principal_point", index=0, text="X")
-            row.prop(props, "principal_point", index=1, text="Y")
+        # Principal point (only in 2VP mode - in 3VP it's auto-derived)
+        if props.mode == '2VP':
+            box = layout.box()
+            box.prop(props, "use_custom_pp", text="Custom Principal Point")
+            if props.use_custom_pp:
+                row = box.row()
+                row.prop(props, "principal_point", index=0, text="X")
+                row.prop(props, "principal_point", index=1, text="Y")
 
         # Reference distance
         box = layout.box()
@@ -86,6 +99,12 @@ class MATCHCAM_PT_main(bpy.types.Panel):
 
             box.label(text=f"Focal Length: {focal:.1f} mm")
             box.label(text=f"FOV: {hfov:.1f}\u00b0 x {vfov:.1f}\u00b0")
+
+            # Show shift values in 3VP mode
+            if props.mode == '3VP' and scene.camera is not None:
+                cam = scene.camera.data
+                if abs(cam.shift_x) > 0.001 or abs(cam.shift_y) > 0.001:
+                    box.label(text=f"Shift: {cam.shift_x:.3f} / {cam.shift_y:.3f}")
 
 
 # ---------------------------------------------------------------------------

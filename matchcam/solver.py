@@ -42,6 +42,35 @@ def image_plane_to_relative(px: float, py: float, aspect: float) -> tuple[float,
 
 
 # ---------------------------------------------------------------------------
+# Triangle orthocenter (for 3VP principal point computation)
+# ---------------------------------------------------------------------------
+
+def triangle_orthocenter(
+    k: tuple[float, float], l: tuple[float, float], m: tuple[float, float]
+) -> tuple[float, float] | None:
+    """Compute the orthocenter of triangle (k, l, m).
+
+    When the three points are vanishing points of three mutually orthogonal
+    directions, the orthocenter is the principal point of the camera.
+    Returns None if the triangle is degenerate.
+    """
+    a, b = k
+    c, d = l
+    e, f = m
+
+    N = b * c + d * e + f * a - c * f - b * e - a * d
+    if abs(N) < 1e-12:
+        return None  # degenerate triangle
+
+    x = ((d - f) * b * b + (f - b) * d * d + (b - d) * f * f
+         + a * b * (c - e) + c * d * (e - a) + e * f * (a - c)) / N
+    y = ((e - c) * a * a + (a - e) * c * c + (c - a) * e * e
+         + a * b * (f - d) + c * d * (b - f) + e * f * (d - b)) / N
+
+    return (x, y)
+
+
+# ---------------------------------------------------------------------------
 # 2D geometry
 # ---------------------------------------------------------------------------
 
@@ -251,6 +280,8 @@ class SolverResult:
     vp1_image_plane: tuple[float, float]
     vp2_image_plane: tuple[float, float]
     relative_focal_length: float
+    shift_x: float = 0.0  # Blender camera shift X
+    shift_y: float = 0.0  # Blender camera shift Y
 
 
 # ---------------------------------------------------------------------------
@@ -285,8 +316,17 @@ def solve_2vp(
     ref_distance: float = 1.0,
     ref_point_a: tuple[float, float] = (0.4, 0.5),
     ref_point_b: tuple[float, float] = (0.6, 0.5),
+    # Third vanishing point (for 3VP mode)
+    vp3_l1_start: tuple[float, float] | None = None,
+    vp3_l1_end: tuple[float, float] | None = None,
+    vp3_l2_start: tuple[float, float] | None = None,
+    vp3_l2_end: tuple[float, float] | None = None,
 ) -> SolverResult | None:
-    """Solve for camera parameters from two vanishing points.
+    """Solve for camera parameters from two (or three) vanishing points.
+
+    When VP3 line segments are provided (3VP mode), the principal point is
+    derived as the orthocenter of the triangle formed by the three VPs.
+    This also produces camera shift values for Blender.
 
     Returns SolverResult or None if the configuration is invalid.
     """
@@ -301,7 +341,6 @@ def solve_2vp(
     vp2_s2 = relative_to_image_plane(*vp2_l2_start, image_aspect)
     vp2_e2 = relative_to_image_plane(*vp2_l2_end, image_aspect)
 
-    pp = relative_to_image_plane(*principal_point, image_aspect)
     orig_ip = relative_to_image_plane(*origin, image_aspect)
 
     # --- Compute vanishing points ---
@@ -310,6 +349,27 @@ def solve_2vp(
 
     if fu is None or fv is None:
         return None  # parallel lines
+
+    # --- Determine principal point ---
+    use_3vp = (vp3_l1_start is not None and vp3_l1_end is not None
+               and vp3_l2_start is not None and vp3_l2_end is not None)
+
+    if use_3vp:
+        # 3VP mode: compute third VP and derive principal point as orthocenter
+        vp3_s1 = relative_to_image_plane(*vp3_l1_start, image_aspect)
+        vp3_e1 = relative_to_image_plane(*vp3_l1_end, image_aspect)
+        vp3_s2 = relative_to_image_plane(*vp3_l2_start, image_aspect)
+        vp3_e2 = relative_to_image_plane(*vp3_l2_end, image_aspect)
+
+        fw = line_intersection(vp3_s1, vp3_e1, vp3_s2, vp3_e2)
+        if fw is None:
+            return None
+
+        pp = triangle_orthocenter(fu, fv, fw)
+        if pp is None:
+            return None
+    else:
+        pp = relative_to_image_plane(*principal_point, image_aspect)
 
     # --- Compute focal length (orthogonality constraint) ---
     # Project principal point onto line Fu-Fv
@@ -474,6 +534,15 @@ def solve_2vp(
         sensor_height = sensor_width / image_aspect
         focal_length_mm = f * sensor_height / 2.0
 
+    # --- Camera shift from principal point offset ---
+    # In image-plane coords, the center is (0, 0).
+    # Blender's shift_x/shift_y: shift of 1.0 = full sensor width.
+    # In our image-plane coords (landscape), horizontal spans [-1, 1] = 2 units = full sensor.
+    # Blender's shift moves the rendered frame, which is the opposite direction
+    # to the principal point offset, so we negate.
+    shift_x = -pp[0] / 2.0
+    shift_y = -pp[1] / 2.0
+
     return SolverResult(
         focal_length_mm=focal_length_mm,
         rotation_quaternion=quat,
@@ -483,4 +552,6 @@ def solve_2vp(
         vp1_image_plane=fu,
         vp2_image_plane=fv,
         relative_focal_length=f,
+        shift_x=shift_x,
+        shift_y=shift_y,
     )

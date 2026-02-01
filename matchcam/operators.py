@@ -22,7 +22,7 @@ from .drawing import (
     unregister_draw_handler,
     HANDLE_RADIUS,
 )
-from .properties import CONTROL_POINT_NAMES, CONTROL_POINT_DEFAULTS
+from .properties import CONTROL_POINT_NAMES, CONTROL_POINT_DEFAULTS, VP3_POINT_NAMES
 from . import solver as solv
 
 
@@ -64,7 +64,8 @@ def _run_solver(scene):
 
     pp = (props.principal_point[0], props.principal_point[1]) if props.use_custom_pp else (0.5, 0.5)
 
-    result = solv.solve_2vp(
+    # Build solver kwargs
+    solver_kwargs = dict(
         vp1_l1_start=(props.vp1_line1_start[0], props.vp1_line1_start[1]),
         vp1_l1_end=(props.vp1_line1_end[0], props.vp1_line1_end[1]),
         vp1_l2_start=(props.vp1_line2_start[0], props.vp1_line2_start[1]),
@@ -85,6 +86,17 @@ def _run_solver(scene):
         ref_point_b=(props.ref_point_b[0], props.ref_point_b[1]),
     )
 
+    # Add 3VP lines if in 3VP mode
+    if props.mode == '3VP':
+        solver_kwargs.update(
+            vp3_l1_start=(props.vp3_line1_start[0], props.vp3_line1_start[1]),
+            vp3_l1_end=(props.vp3_line1_end[0], props.vp3_line1_end[1]),
+            vp3_l2_start=(props.vp3_line2_start[0], props.vp3_line2_start[1]),
+            vp3_l2_end=(props.vp3_line2_end[0], props.vp3_line2_end[1]),
+        )
+
+    result = solv.solve_2vp(**solver_kwargs)
+
     if result is None:
         # Store invalid state for UI feedback
         scene['_matchcam_valid'] = False
@@ -102,6 +114,10 @@ def _run_solver(scene):
     cam.rotation_quaternion = result.rotation_quaternion
 
     cam.location = result.location
+
+    # Apply camera shift (from principal point offset, significant in 3VP mode)
+    cam.data.shift_x = result.shift_x
+    cam.data.shift_y = result.shift_y
 
 
 # ---------------------------------------------------------------------------
@@ -158,8 +174,11 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
             if self._dragging and self._drag_idx >= 0:
                 # Update the dragged control point
                 name = CONTROL_POINT_NAMES[self._drag_idx]
-                # Skip ref points if disabled
+                # Skip inactive points
                 if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
+                    self._dragging = False
+                    self._drag_idx = -1
+                elif name in VP3_POINT_NAMES and props.mode != '3VP':
                     self._dragging = False
                     self._drag_idx = -1
                 else:
@@ -241,7 +260,11 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
         best_dist = HANDLE_RADIUS + 5.0
         best_idx = -1
 
+        is_3vp = (props.mode == '3VP')
+
         for i, name in enumerate(CONTROL_POINT_NAMES):
+            if name in VP3_POINT_NAMES and not is_3vp:
+                continue
             if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
                 continue
 

@@ -16,6 +16,17 @@ class MatchCamProperties(bpy.types.PropertyGroup):
         default=False,
     )
 
+    # Mode: 2VP or 3VP
+    mode: EnumProperty(
+        name="Mode",
+        description="Number of vanishing points to use",
+        items=[
+            ('2VP', "2-Point", "Two vanishing points (assumes principal point at center)"),
+            ('3VP', "3-Point", "Three vanishing points (derives principal point and camera shift)"),
+        ],
+        default='2VP',
+    )
+
     # VP1 - first pair of convergence lines
     vp1_line1_start: FloatVectorProperty(
         name="VP1 Line1 Start", size=2, default=(0.3, 0.35),
@@ -42,6 +53,20 @@ class MatchCamProperties(bpy.types.PropertyGroup):
     )
     vp2_line2_end: FloatVectorProperty(
         name="VP2 Line2 End", size=2, default=(0.6, 0.7),
+    )
+
+    # VP3 - third pair of convergence lines (for 3VP mode)
+    vp3_line1_start: FloatVectorProperty(
+        name="VP3 Line1 Start", size=2, default=(0.34, 0.61),
+    )
+    vp3_line1_end: FloatVectorProperty(
+        name="VP3 Line1 End", size=2, default=(0.31, 0.31),
+    )
+    vp3_line2_start: FloatVectorProperty(
+        name="VP3 Line2 Start", size=2, default=(0.68, 0.61),
+    )
+    vp3_line2_end: FloatVectorProperty(
+        name="VP3 Line2 End", size=2, default=(0.71, 0.35),
     )
 
     # Origin point - where the world origin projects onto the image
@@ -93,7 +118,7 @@ class MatchCamProperties(bpy.types.PropertyGroup):
         name="Ref Point B", size=2, default=(0.6, 0.5),
     )
 
-    # Principal point
+    # Principal point (manual override, only used in 2VP mode)
     use_custom_pp: BoolProperty(
         name="Custom Principal Point",
         description="Override default image-center principal point",
@@ -110,6 +135,8 @@ CONTROL_POINT_NAMES = [
     "vp1_line2_start", "vp1_line2_end",
     "vp2_line1_start", "vp2_line1_end",
     "vp2_line2_start", "vp2_line2_end",
+    "vp3_line1_start", "vp3_line1_end",
+    "vp3_line2_start", "vp3_line2_end",
     "origin_point",
     "ref_point_a", "ref_point_b",
 ]
@@ -124,10 +151,17 @@ CONTROL_POINT_DEFAULTS = {
     "vp2_line1_end": (0.4, 0.7),
     "vp2_line2_start": (0.65, 0.3),
     "vp2_line2_end": (0.6, 0.7),
+    "vp3_line1_start": (0.34, 0.61),
+    "vp3_line1_end": (0.31, 0.31),
+    "vp3_line2_start": (0.68, 0.61),
+    "vp3_line2_end": (0.71, 0.35),
     "origin_point": (0.5, 0.5),
     "ref_point_a": (0.4, 0.5),
     "ref_point_b": (0.6, 0.5),
 }
+
+# Names grouped by VP for drawing/interaction filtering
+VP3_POINT_NAMES = ["vp3_line1_start", "vp3_line1_end", "vp3_line2_start", "vp3_line2_end"]
 
 
 def register():

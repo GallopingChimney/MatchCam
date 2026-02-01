@@ -20,18 +20,23 @@ from . import solver as solv
 # Colors
 # ---------------------------------------------------------------------------
 
-COL_VP1_LINE = (0.95, 0.3, 0.2, 0.9)       # red
-COL_VP1_LINE_EXT = (0.95, 0.3, 0.2, 0.3)   # red faded
-COL_VP1_HANDLE = (1.0, 0.4, 0.3, 1.0)
-COL_VP1_HANDLE_HOVER = (1.0, 0.7, 0.5, 1.0)
+COL_VP1_LINE = (0.95, 0.2, 0.2, 0.9)       # red (X)
+COL_VP1_LINE_EXT = (0.95, 0.2, 0.2, 0.3)
+COL_VP1_HANDLE = (1.0, 0.3, 0.3, 1.0)
+COL_VP1_HANDLE_HOVER = (1.0, 0.6, 0.5, 1.0)
 
-COL_VP2_LINE = (0.2, 0.5, 0.95, 0.9)       # blue
-COL_VP2_LINE_EXT = (0.2, 0.5, 0.95, 0.3)   # blue faded
-COL_VP2_HANDLE = (0.3, 0.6, 1.0, 1.0)
-COL_VP2_HANDLE_HOVER = (0.5, 0.8, 1.0, 1.0)
+COL_VP2_LINE = (0.2, 0.85, 0.2, 0.9)       # green (Y)
+COL_VP2_LINE_EXT = (0.2, 0.85, 0.2, 0.3)
+COL_VP2_HANDLE = (0.3, 0.9, 0.3, 1.0)
+COL_VP2_HANDLE_HOVER = (0.6, 1.0, 0.6, 1.0)
 
-COL_ORIGIN = (0.2, 0.9, 0.3, 1.0)          # green
-COL_ORIGIN_HOVER = (0.5, 1.0, 0.6, 1.0)
+COL_VP3_LINE = (0.2, 0.5, 0.95, 0.9)       # blue (Z)
+COL_VP3_LINE_EXT = (0.2, 0.5, 0.95, 0.3)
+COL_VP3_HANDLE = (0.3, 0.6, 1.0, 1.0)
+COL_VP3_HANDLE_HOVER = (0.5, 0.8, 1.0, 1.0)
+
+COL_ORIGIN = (1.0, 0.8, 0.0, 1.0)          # yellow/orange (distinct from VP2 green)
+COL_ORIGIN_HOVER = (1.0, 0.9, 0.4, 1.0)
 
 COL_REF_LINE = (0.9, 0.9, 0.2, 0.8)        # yellow
 COL_REF_HANDLE = (1.0, 1.0, 0.3, 1.0)
@@ -81,7 +86,6 @@ def get_camera_frame_px(context) -> tuple[float, float, float, float] | None:
     scene = context.scene
     region = context.region
 
-    # Get camera border in region space
     frame = _view3d_camera_border(scene, region, rv3d)
     if frame is None:
         return None
@@ -98,29 +102,6 @@ def _view3d_camera_border(scene, region, rv3d):
     if cam is None:
         return None
 
-    # Use the view3d utility to get camera frame
-    from bpy_extras.view3d_utils import location_3d_to_region_2d
-    from mathutils import Vector
-
-    # Get render resolution
-    render = scene.render
-    res_x = render.resolution_x
-    res_y = render.resolution_y
-    aspect = render.pixel_aspect_x / render.pixel_aspect_y
-
-    # Camera frame corners in normalized device coordinates
-    # We compute the frame by projecting the camera's view corners
-    cam_data = cam.data
-
-    # Use the view mapping approach
-    # In camera view, Blender maps the camera sensor to a specific screen region
-    # We can find it by checking view2d or using the frame coordinates
-
-    # Simpler approach: use the region dimensions and view mapping
-    # The camera frame in region space can be found via the projection matrix
-    import bpy
-
-    # Get camera frame using Blender's own function
     frame_px = _compute_camera_border_from_projection(
         scene, region, rv3d, cam
     )
@@ -130,16 +111,11 @@ def _view3d_camera_border(scene, region, rv3d):
 def _compute_camera_border_from_projection(scene, region, rv3d, camera):
     """Compute camera frame corners by projecting known camera-space points."""
     from bpy_extras.view3d_utils import location_3d_to_region_2d
-    from mathutils import Vector
 
-    # Project camera's own position - this gives us the center
-    # Better: project 4 corners of the camera frame at distance 1
     cam_data = camera.data
     cam_matrix = camera.matrix_world
 
-    # Get the camera frame corners at distance 1
     frame = cam_data.view_frame(scene=scene)
-    # frame returns 4 Vector corners in camera local space
 
     corners_2d = []
     for corner in frame:
@@ -149,7 +125,6 @@ def _compute_camera_border_from_projection(scene, region, rv3d, camera):
             return None
         corners_2d.append(pos_2d)
 
-    # Find bounding box
     xs = [c.x for c in corners_2d]
     ys = [c.y for c in corners_2d]
 
@@ -166,7 +141,7 @@ def normalized_to_screen(
 ) -> tuple[float, float]:
     """Convert normalized (0-1) image coords to screen pixels."""
     fx, fy, fw, fh = frame
-    return (fx + nx * fw, fy + (1.0 - ny) * fh)  # flip Y: 0=top in normalized, bottom in screen
+    return (fx + nx * fw, fy + (1.0 - ny) * fh)
 
 
 def screen_to_normalized(
@@ -203,6 +178,8 @@ def draw_callback(context):
     # Get hover state from the running modal operator
     hover_idx = scene.get("_matchcam_hover_idx", -1)
 
+    is_3vp = (props.mode == '3VP')
+
     shader = gpu.shader.from_builtin('UNIFORM_COLOR')
     gpu.state.blend_set('ALPHA')
     gpu.state.line_width_set(LINE_WIDTH)
@@ -228,6 +205,15 @@ def draw_callback(context):
         COL_VP2_LINE, COL_VP2_LINE_EXT,
     )
 
+    # --- Draw VP3 lines (3VP mode only) ---
+    if is_3vp:
+        _draw_line_pair(
+            shader,
+            _pt('vp3_line1_start'), _pt('vp3_line1_end'),
+            _pt('vp3_line2_start'), _pt('vp3_line2_end'),
+            COL_VP3_LINE, COL_VP3_LINE_EXT,
+        )
+
     # --- Draw reference distance line ---
     if props.ref_distance_enabled:
         _draw_line(shader, _pt('ref_point_a'), _pt('ref_point_b'), COL_REF_LINE)
@@ -235,10 +221,14 @@ def draw_callback(context):
     # --- Draw handles ---
     vp1_names = ['vp1_line1_start', 'vp1_line1_end', 'vp1_line2_start', 'vp1_line2_end']
     vp2_names = ['vp2_line1_start', 'vp2_line1_end', 'vp2_line2_start', 'vp2_line2_end']
+    vp3_names = ['vp3_line1_start', 'vp3_line1_end', 'vp3_line2_start', 'vp3_line2_end']
 
     from .properties import CONTROL_POINT_NAMES
 
     for i, name in enumerate(CONTROL_POINT_NAMES):
+        # Skip VP3 handles in 2VP mode
+        if name in vp3_names and not is_3vp:
+            continue
         if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
             continue
 
@@ -249,6 +239,8 @@ def draw_callback(context):
             col = COL_VP1_HANDLE_HOVER if is_hover else COL_VP1_HANDLE
         elif name in vp2_names:
             col = COL_VP2_HANDLE_HOVER if is_hover else COL_VP2_HANDLE
+        elif name in vp3_names:
+            col = COL_VP3_HANDLE_HOVER if is_hover else COL_VP3_HANDLE
         elif name == 'origin_point':
             col = COL_ORIGIN_HOVER if is_hover else COL_ORIGIN
         else:
@@ -258,7 +250,7 @@ def draw_callback(context):
         _draw_filled_circle(shader, pos[0], pos[1], radius, col)
 
     # --- Draw VP indicators ---
-    _draw_vp_indicators(shader, props, frame)
+    _draw_vp_indicators(shader, props, frame, is_3vp)
 
     # Restore state
     gpu.state.blend_set('NONE')
@@ -310,9 +302,8 @@ def _draw_filled_circle(shader, cx, cy, radius, color, segments=16):
     batch.draw(shader)
 
 
-def _draw_vp_indicators(shader, props, frame):
+def _draw_vp_indicators(shader, props, frame, is_3vp):
     """Draw small diamonds at the computed vanishing point positions."""
-    # We need the solver result - compute it here for display
     cam = bpy.context.scene.camera
     if cam is None:
         return
@@ -321,7 +312,6 @@ def _draw_vp_indicators(shader, props, frame):
     if not bg_images:
         return
 
-    # Get image aspect
     bg = bg_images[0]
     if bg.image is None:
         return
@@ -333,31 +323,35 @@ def _draw_vp_indicators(shader, props, frame):
     aspect = w / h
 
     # Compute VPs
-    vp1_s1 = solv.relative_to_image_plane(props.vp1_line1_start[0], props.vp1_line1_start[1], aspect)
-    vp1_e1 = solv.relative_to_image_plane(props.vp1_line1_end[0], props.vp1_line1_end[1], aspect)
-    vp1_s2 = solv.relative_to_image_plane(props.vp1_line2_start[0], props.vp1_line2_start[1], aspect)
-    vp1_e2 = solv.relative_to_image_plane(props.vp1_line2_end[0], props.vp1_line2_end[1], aspect)
+    def _vp_from_lines(s1_name, e1_name, s2_name, e2_name):
+        s1 = getattr(props, s1_name)
+        e1 = getattr(props, e1_name)
+        s2 = getattr(props, s2_name)
+        e2 = getattr(props, e2_name)
+        ip_s1 = solv.relative_to_image_plane(s1[0], s1[1], aspect)
+        ip_e1 = solv.relative_to_image_plane(e1[0], e1[1], aspect)
+        ip_s2 = solv.relative_to_image_plane(s2[0], s2[1], aspect)
+        ip_e2 = solv.relative_to_image_plane(e2[0], e2[1], aspect)
+        return solv.line_intersection(ip_s1, ip_e1, ip_s2, ip_e2)
 
-    vp2_s1 = solv.relative_to_image_plane(props.vp2_line1_start[0], props.vp2_line1_start[1], aspect)
-    vp2_e1 = solv.relative_to_image_plane(props.vp2_line1_end[0], props.vp2_line1_end[1], aspect)
-    vp2_s2 = solv.relative_to_image_plane(props.vp2_line2_start[0], props.vp2_line2_start[1], aspect)
-    vp2_e2 = solv.relative_to_image_plane(props.vp2_line2_end[0], props.vp2_line2_end[1], aspect)
+    fu = _vp_from_lines('vp1_line1_start', 'vp1_line1_end', 'vp1_line2_start', 'vp1_line2_end')
+    fv = _vp_from_lines('vp2_line1_start', 'vp2_line1_end', 'vp2_line2_start', 'vp2_line2_end')
 
-    fu = solv.line_intersection(vp1_s1, vp1_e1, vp1_s2, vp1_e2)
-    fv = solv.line_intersection(vp2_s1, vp2_e1, vp2_s2, vp2_e2)
+    vp_list = [(fu, COL_VP1_LINE), (fv, COL_VP2_LINE)]
 
-    for vp, col in [(fu, COL_VP1_LINE), (fv, COL_VP2_LINE)]:
+    if is_3vp:
+        fw = _vp_from_lines('vp3_line1_start', 'vp3_line1_end', 'vp3_line2_start', 'vp3_line2_end')
+        vp_list.append((fw, COL_VP3_LINE))
+
+    for vp, col in vp_list:
         if vp is None:
             continue
 
-        # Convert back to relative then to screen
         rel = solv.image_plane_to_relative(vp[0], vp[1], aspect)
         sx, sy = normalized_to_screen(rel[0], rel[1], frame)
 
-        # Only draw if on screen (roughly)
         region = bpy.context.region
         if -500 < sx < region.width + 500 and -500 < sy < region.height + 500:
-            # Draw diamond
             sz = 6.0
             verts = [
                 (sx, sy + sz),
