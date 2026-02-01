@@ -180,7 +180,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 # Update hover state
                 old_hover = self._hover_idx
                 self._hover_idx = self._hit_test(props, mx, my, frame)
-                scene._matchcam_hover_idx = self._hover_idx
+                scene["_matchcam_hover_idx"] = self._hover_idx
 
                 if old_hover != self._hover_idx:
                     self._tag_redraw(context)
@@ -262,7 +262,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
 
     def _cleanup(self, context):
         unregister_draw_handler()
-        context.scene._matchcam_hover_idx = -1
+        context.scene["_matchcam_hover_idx"] = -1
         self._tag_redraw(context)
 
     def cancel(self, context):

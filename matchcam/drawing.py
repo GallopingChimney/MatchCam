@@ -201,7 +201,7 @@ def draw_callback(context):
         return
 
     # Get hover state from the running modal operator
-    hover_idx = getattr(scene, '_matchcam_hover_idx', -1)
+    hover_idx = scene.get("_matchcam_hover_idx", -1)
 
     shader = gpu.shader.from_builtin('UNIFORM_COLOR')
     gpu.state.blend_set('ALPHA')

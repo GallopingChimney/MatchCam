@@ -7,6 +7,8 @@ points defined by user-placed line segments on an image.
 Based on the method described in:
 "Using Vanishing Points for Camera Calibration and Coarse 3D Reconstruction
 from a Single Image" - Guillou, Meneveaux, Maisel, Bouatouch
+
+Math closely follows fSpy's solver implementation.
 """
 
 from __future__ import annotations
@@ -123,8 +125,14 @@ def vec3_sub(
     return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
 
 
+def vec3_add(
+    a: tuple[float, float, float], b: tuple[float, float, float]
+) -> tuple[float, float, float]:
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
 # ---------------------------------------------------------------------------
-# Matrix helpers (3x3 stored as row-major tuple of 3 row-tuples)
+# Matrix helpers (3x3 stored as row-major: m[row][col])
 # ---------------------------------------------------------------------------
 
 Matrix3 = tuple[
@@ -146,6 +154,14 @@ def mat3_from_columns(
     )
 
 
+def mat3_from_rows(
+    r0: tuple[float, float, float],
+    r1: tuple[float, float, float],
+    r2: tuple[float, float, float],
+) -> Matrix3:
+    return (r0, r1, r2)
+
+
 def mat3_determinant(m: Matrix3) -> float:
     return (
         m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
@@ -155,6 +171,7 @@ def mat3_determinant(m: Matrix3) -> float:
 
 
 def mat3_mul(a: Matrix3, b: Matrix3) -> Matrix3:
+    """Standard matrix multiplication: result = a @ b."""
     result = []
     for i in range(3):
         row = []
@@ -167,8 +184,13 @@ def mat3_mul(a: Matrix3, b: Matrix3) -> Matrix3:
     return tuple(result)
 
 
-def mat3_col(m: Matrix3, j: int) -> tuple[float, float, float]:
-    return (m[0][j], m[1][j], m[2][j])
+def mat3_vec_mul(m: Matrix3, v: tuple[float, float, float]) -> tuple[float, float, float]:
+    """Matrix-vector multiplication: result = m @ v."""
+    return (
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    )
 
 
 def mat3_transpose(m: Matrix3) -> Matrix3:
@@ -235,6 +257,9 @@ class SolverResult:
 # Main solver
 # ---------------------------------------------------------------------------
 
+DEFAULT_CAMERA_DISTANCE = 10.0
+
+
 def solve_2vp(
     # VP1 line segments (normalized 0-1 coords)
     vp1_l1_start: tuple[float, float],
@@ -295,31 +320,34 @@ def solve_2vp(
 
     dir_fuv_n = vec_scale(dir_fuv, 1.0 / dir_fuv_len)
 
-    # Projection of P onto line Fu-Fv
+    # Projection of P onto line Fu-Fv: Puv
     pp_to_fv = vec_sub(pp, fv)
     proj = vec_dot(dir_fuv_n, pp_to_fv)
     puv = vec_add(fv, vec_scale(dir_fuv_n, proj))
 
-    pp_puv_dist = vec_length(vec_sub(pp, puv))
-    fv_puv_dist = vec_length(vec_sub(fv, puv))
-    fu_puv_dist = vec_length(vec_sub(fu, puv))
+    pp_puv_dist_sq = vec_dot(vec_sub(pp, puv), vec_sub(pp, puv))
 
-    # Check sign: need to know if Puv is between Fu and Fv
-    # The formula works when Puv is between Fu and Fv (standard case)
-    # We need: fv_puv * fu_puv where the signs depend on relative position
-    # Use signed distances along the line
-    fv_puv_signed = proj  # distance from Fv to Puv along direction Fu-Fv
-    fu_puv_signed = proj - dir_fuv_len  # distance from Fu to Puv
+    # Signed distances from Puv to each VP along the Fu-Fv direction
+    fv_puv_signed = proj
+    fu_puv_signed = proj - dir_fuv_len
 
-    f_squared = fv_puv_signed * fu_puv_signed * -1.0 - pp_puv_dist * pp_puv_dist
+    f_squared = -(fv_puv_signed * fu_puv_signed) - pp_puv_dist_sq
 
     if f_squared <= 0:
         return None  # invalid VP configuration
 
     f = math.sqrt(f_squared)
 
-    # --- Compute rotation matrix ---
-    # Vectors from principal point through VPs in camera space
+    # --- Compute FOV ---
+    if image_aspect >= 1.0:
+        hfov = 2.0 * math.atan(1.0 / f)
+        vfov = 2.0 * math.atan(1.0 / (f * image_aspect))
+    else:
+        hfov = 2.0 * math.atan(image_aspect / f)
+        vfov = 2.0 * math.atan(1.0 / f)
+
+    # --- Compute camera rotation matrix ---
+    # Vectors from principal point through VPs in camera space (camera looks down -Z)
     ofu = (fu[0] - pp[0], fu[1] - pp[1], -f)
     ofv = (fv[0] - pp[0], fv[1] - pp[1], -f)
 
@@ -333,144 +361,111 @@ def solve_2vp(
     col_v = vec3_normalize(ofv)
     col_w = vec3_cross(col_u, col_v)
 
-    # Build rotation matrix (columns are camera-space axis directions)
-    rot = mat3_from_columns(col_u, col_v, col_w)
+    # Camera rotation matrix: columns are the VP directions in camera space
+    # This maps from "VP direction space" to camera space
+    cam_rot = mat3_from_columns(col_u, col_v, col_w)
 
     # Ensure proper rotation (det = 1)
-    det = mat3_determinant(rot)
+    det = mat3_determinant(cam_rot)
     if abs(det) < 1e-6:
         return None
 
     if det < 0:
         col_w = vec3_scale(col_w, -1.0)
-        rot = mat3_from_columns(col_u, col_v, col_w)
+        cam_rot = mat3_from_columns(col_u, col_v, col_w)
 
-    # --- Apply axis assignment ---
-    # Build permutation: which world axis each VP direction maps to
-    axis_map = {'X': 0, 'Y': 1, 'Z': 2}
-    a1 = axis_map[vp1_axis]
-    a2 = axis_map[vp2_axis]
+    # --- Axis assignment ---
+    # Build axis assignment matrix with ROWS as axis vectors (following fSpy)
+    # Row 0 = world axis vector for VP1
+    # Row 1 = world axis vector for VP2
+    # Row 2 = cross product (right-hand rule)
+    axis_vectors = {
+        'X': (1.0, 0.0, 0.0),
+        'Y': (0.0, 1.0, 0.0),
+        'Z': (0.0, 0.0, 1.0),
+    }
 
-    if a1 == a2:
-        return None  # same axis for both VPs
+    if vp1_axis == vp2_axis:
+        return None
 
-    # Third axis
-    a3 = 3 - a1 - a2  # 0+1+2=3, so the remaining one
+    row0 = axis_vectors[vp1_axis]
+    row1 = axis_vectors[vp2_axis]
+    row2 = vec3_cross(row0, row1)
 
-    # Determine sign of third axis to maintain right-handedness
-    # We need the permutation matrix P such that R_world = R * P
-    # P maps: column 0 -> axis a1, column 1 -> axis a2, column 2 -> axis a3
-    perm = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
-    perm[a1][0] = 1.0
-    perm[a2][1] = 1.0
+    axis_mat = mat3_from_rows(row0, row1, row2)
 
-    # Third axis: cross product of the first two standard basis vectors
-    # to maintain right-handedness
-    e1 = [0.0, 0.0, 0.0]
-    e1[a1] = 1.0
-    e2 = [0.0, 0.0, 0.0]
-    e2[a2] = 1.0
-    e3 = vec3_cross(tuple(e1), tuple(e2))
+    # Validate: determinant must be +-1
+    axis_det = mat3_determinant(axis_mat)
+    if abs(abs(axis_det) - 1.0) > 1e-6:
+        return None
 
-    perm[0][2] = e3[0]
-    perm[1][2] = e3[1]
-    perm[2][2] = e3[2]
+    # --- Combine: viewTransform = cam_rot @ axis_mat ---
+    # Following fSpy: axisAssignmentMatrix.leftMultiplied(cameraRotationMatrix)
+    # which computes cameraRotationMatrix × axisAssignmentMatrix
+    # This gives us the world-to-camera rotation matrix
+    view_rot = mat3_mul(cam_rot, axis_mat)
 
-    perm_mat: Matrix3 = (
-        tuple(perm[0]),
-        tuple(perm[1]),
-        tuple(perm[2]),
+    # Ensure det = 1
+    view_det = mat3_determinant(view_rot)
+    if view_det < 0:
+        # Flip third row of axis matrix
+        row2 = vec3_scale(row2, -1.0)
+        axis_mat = mat3_from_rows(row0, row1, row2)
+        view_rot = mat3_mul(cam_rot, axis_mat)
+
+    # --- Compute translation in camera space ---
+    # Following fSpy: the origin point is unprojected to camera space
+    k = math.tan(0.5 * hfov)
+
+    # Translation = position of world origin in camera space
+    translation_cam = (
+        k * (orig_ip[0] - pp[0]),
+        k * (orig_ip[1] - pp[1]),
+        -1.0,
     )
-
-    rot_world = mat3_mul(rot, mat3_transpose(perm_mat))
-
-    # Ensure det is still 1 after permutation
-    det_world = mat3_determinant(rot_world)
-    if det_world < 0:
-        # Flip the third axis
-        perm[0][2] = -e3[0]
-        perm[1][2] = -e3[1]
-        perm[2][2] = -e3[2]
-        perm_mat = (tuple(perm[0]), tuple(perm[1]), tuple(perm[2]))
-        rot_world = mat3_mul(rot, mat3_transpose(perm_mat))
-
-    # --- Convert to Blender camera convention ---
-    # Blender camera: -Z forward, +Y up
-    # Our solver: +Z forward (into scene), +Y up
-    # Apply 180-degree rotation around X: flips Y and Z
-    flip_x = (
-        (1.0, 0.0, 0.0),
-        (0.0, -1.0, 0.0),
-        (0.0, 0.0, -1.0),
-    )
-    rot_blender = mat3_mul(rot_world, flip_x)
-
-    # --- Compute translation ---
-    # The camera looks from the origin of camera space.
-    # We unproject the user-placed origin point to get the direction,
-    # then place the camera at a default distance along that direction.
-    # Direction from camera through origin point in image
-    k = math.tan(math.atan2(1.0, f))  # = 1/f, simplifies to just 1/f
-    # Actually, for our normalized coord system:
-    # A point (px, py) in image plane projects to direction (px, py, -f) in camera space
-    # Normalized: that's the ray direction in camera coords
-
-    ray_cam = (orig_ip[0] - pp[0], orig_ip[1] - pp[1], -f)
-    ray_cam_n = vec3_normalize(ray_cam)
-
-    # Transform ray to world space using rotation matrix
-    # ray_world = R^T * ray_cam (R is camera-to-world rotation, columns are world axes in camera frame)
-    # Actually rot_world columns are camera axes in world frame
-    # So world_dir = rot_world * ray_cam_n
-    ray_world = (
-        rot_world[0][0] * ray_cam_n[0] + rot_world[0][1] * ray_cam_n[1] + rot_world[0][2] * ray_cam_n[2],
-        rot_world[1][0] * ray_cam_n[0] + rot_world[1][1] * ray_cam_n[1] + rot_world[1][2] * ray_cam_n[2],
-        rot_world[2][0] * ray_cam_n[0] + rot_world[2][1] * ray_cam_n[1] + rot_world[2][2] * ray_cam_n[2],
-    )
-
-    # Default camera distance: 10 units
-    cam_distance = 10.0
-
-    # Camera is at -ray_world * distance (looking toward origin)
-    location = vec3_scale(ray_world, -cam_distance)
+    translation_cam = vec3_scale(translation_cam, DEFAULT_CAMERA_DISTANCE)
 
     # --- Reference distance scaling ---
     if ref_distance_enabled and ref_distance > 0:
         ra_ip = relative_to_image_plane(*ref_point_a, image_aspect)
         rb_ip = relative_to_image_plane(*ref_point_b, image_aspect)
 
-        # Unproject both reference points to 3D
-        ray_a_cam = (ra_ip[0] - pp[0], ra_ip[1] - pp[1], -f)
-        ray_b_cam = (rb_ip[0] - pp[0], rb_ip[1] - pp[1], -f)
+        # Unproject reference points to camera-space 3D positions
+        # at the same depth as the origin
+        ref_a_cam = (
+            k * (ra_ip[0] - pp[0]),
+            k * (ra_ip[1] - pp[1]),
+            -1.0,
+        )
+        ref_a_cam = vec3_scale(ref_a_cam, DEFAULT_CAMERA_DISTANCE)
 
-        # Transform to world space
-        def mat_vec_mul(m, v):
-            return (
-                m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
-                m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
-                m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
-            )
+        ref_b_cam = (
+            k * (rb_ip[0] - pp[0]),
+            k * (rb_ip[1] - pp[1]),
+            -1.0,
+        )
+        ref_b_cam = vec3_scale(ref_b_cam, DEFAULT_CAMERA_DISTANCE)
 
-        ray_a_w = vec3_normalize(mat_vec_mul(rot_world, ray_a_cam))
-        ray_b_w = vec3_normalize(mat_vec_mul(rot_world, ray_b_cam))
-
-        # At default distance, points are at:
-        pt_a = vec3_scale(ray_a_w, cam_distance)
-        pt_b = vec3_scale(ray_b_w, cam_distance)
-
-        default_dist = vec3_length(vec3_sub(pt_a, pt_b))
+        default_dist = vec3_length(vec3_sub(ref_a_cam, ref_b_cam))
         if default_dist > 1e-10:
             scale = ref_distance / default_dist
-            cam_distance *= scale
-            location = vec3_scale(ray_world, -cam_distance)
+            translation_cam = vec3_scale(translation_cam, scale)
 
-    # --- Compute FOV ---
-    if image_aspect >= 1.0:
-        hfov = 2.0 * math.atan(1.0 / f)
-        vfov = 2.0 * math.atan(1.0 / (f * image_aspect))
-    else:
-        hfov = 2.0 * math.atan(image_aspect / f)
-        vfov = 2.0 * math.atan(1.0 / f)
+    # --- Convert to Blender camera parameters ---
+    # view_rot is the world-to-camera rotation (columns of view_rot are
+    # where world X,Y,Z axes point in camera space).
+    #
+    # Blender camera convention: -Z forward, +Y up (same as fSpy's camera space).
+    # Blender's camera.matrix_world gives the camera-to-world transform.
+    #
+    # camera-to-world rotation = view_rot^T (inverse = transpose for orthonormal)
+    # camera world position = -view_rot^T @ translation_cam
+
+    cam_to_world_rot = mat3_transpose(view_rot)
+    location = vec3_scale(mat3_vec_mul(cam_to_world_rot, translation_cam), -1.0)
+
+    # Quaternion from the camera-to-world rotation
+    quat = quaternion_from_matrix(cam_to_world_rot)
 
     # --- Focal length in mm ---
     if image_aspect >= 1.0:
@@ -478,9 +473,6 @@ def solve_2vp(
     else:
         sensor_height = sensor_width / image_aspect
         focal_length_mm = f * sensor_height / 2.0
-
-    # --- Quaternion ---
-    quat = quaternion_from_matrix(rot_blender)
 
     return SolverResult(
         focal_length_mm=focal_length_mm,
