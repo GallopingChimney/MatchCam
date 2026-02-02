@@ -1,4 +1,28 @@
-/fSpy
-fSpy
-/blender_python_reference_5_0
+# Reference / third-party source
+fSpy/
+blender_python_reference_5_0/
+
+# Development notes
 notes.txt
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Distribution archives
+*.zip
+
+# Old build archives
+Archive/
+
+# Claude Code local config
+.claude/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Blender temp files
+*.blend1
+*.blend2

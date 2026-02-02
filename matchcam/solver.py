@@ -1,14 +1,14 @@
 """
 Camera calibration solver for MatchCam.
 
-Computes camera focal length, rotation, and translation from two vanishing
+Computes camera focal length, rotation, and translation from vanishing
 points defined by user-placed line segments on an image.
 
 Based on the method described in:
 "Using Vanishing Points for Camera Calibration and Coarse 3D Reconstruction
 from a Single Image" - Guillou, Meneveaux, Maisel, Bouatouch
 
-Math closely follows fSpy's solver implementation.
+Inspired by fSpy (https://fspy.io/).
 """
 
 from __future__ import annotations

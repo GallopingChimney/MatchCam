@@ -1,9 +1,0 @@
-make sure the origin handle is updated in the viewport when the origin reset button is triggered. right now it doesnt update until nomething else happens.
-
-group the resent control points, reset origin points, lock and keyframe buttons into icon buttons on the same row, with hover tooltips. 
-
-group custom optical centre and reference distance.
-
-change opacity text to Image Opacity. add radio buttons to set background image to front or back, default on back.
-
-set default image opacity at 37%
