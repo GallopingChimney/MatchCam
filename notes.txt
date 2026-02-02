@@ -1,4 +1,4 @@
 can you make it such that the loupe appears as soon as shift is pressed through release, of course only as long as the VP is clicked/dragged/selected.
 
-add fucntionality such that when CTRL + SHIFT are used to modify the VP handle furthest from the axis intersection, the intersection location is locked, and so itd be like dragging the end of the line to a new end point, the inner vp handle gets aligned automatically - does that make sense?
+add functionality such that when CTRL + SHIFT are used to modify the VP handle furthest from the axis intersection, the intersection location is locked, and so itd be like dragging the end of the line to a new end point, the inner vp handle gets aligned automatically - does that make sense?
 

@@ -174,8 +174,9 @@ def _get_vp_normalized(props, vp_group):
 def _move_vp_to(props, vp_group, target):
     """Adjust line endpoints so VP group converges at *target* (normalized).
 
-    Each line segment is rotated around its midpoint to point toward the
-    new vanishing point, preserving the segment length.
+    The handle farthest from the target VP stays fixed as a pivot; the
+    nearer handle is moved onto the line from pivot through target,
+    preserving the segment length.
     """
     prefix = _VP_PREFIXES[vp_group]
     for line_num in (1, 2):
@@ -186,20 +187,76 @@ def _move_vp_to(props, vp_group, target):
         s = (s[0], s[1])
         e = (e[0], e[1])
 
-        mx, my = (s[0] + e[0]) / 2, (s[1] + e[1]) / 2
-        dx, dy = e[0] - s[0], e[1] - s[1]
-        half_len = math.sqrt(dx * dx + dy * dy) / 2
-        if half_len < 1e-6:
+        seg_dx, seg_dy = e[0] - s[0], e[1] - s[1]
+        seg_len = math.sqrt(seg_dx * seg_dx + seg_dy * seg_dy)
+        if seg_len < 1e-6:
             continue
 
-        vdx, vdy = target[0] - mx, target[1] - my
+        # Determine which handle is farther from the VP target (= pivot)
+        ds = math.sqrt((s[0] - target[0]) ** 2 + (s[1] - target[1]) ** 2)
+        de = math.sqrt((e[0] - target[0]) ** 2 + (e[1] - target[1]) ** 2)
+
+        if ds >= de:
+            # Start is farther — it stays fixed, end moves
+            pivot = s
+            move_name = e_name
+        else:
+            # End is farther — it stays fixed, start moves
+            pivot = e
+            move_name = s_name
+
+        # Direction from target VP through pivot
+        vdx, vdy = pivot[0] - target[0], pivot[1] - target[1]
         vlen = math.sqrt(vdx * vdx + vdy * vdy)
         if vlen < 1e-6:
             continue
 
         ndx, ndy = vdx / vlen, vdy / vlen
-        setattr(props, s_name, (mx - ndx * half_len, my - ndy * half_len))
-        setattr(props, e_name, (mx + ndx * half_len, my + ndy * half_len))
+        # Place the moving handle at segment length from pivot, toward the VP
+        setattr(props, move_name, (pivot[0] - ndx * seg_len, pivot[1] - ndy * seg_len))
+
+
+def _pivot_adjust_partner(vp, dragged_pos, partner_pos):
+    """Compute new partner handle position when pivoting around a locked VP.
+
+    The partner handle is placed on the line from *vp* through *dragged_pos*,
+    preserving its original distance from *vp*.
+
+    Returns (nx, ny) for the partner, or None if degenerate.
+    """
+    dx, dy = dragged_pos[0] - vp[0], dragged_pos[1] - vp[1]
+    dist_d = math.sqrt(dx * dx + dy * dy)
+    if dist_d < 1e-10:
+        return None
+
+    # Direction from VP toward dragged handle
+    ndx, ndy = dx / dist_d, dy / dist_d
+
+    # Partner's original distance from VP
+    px, py = partner_pos[0] - vp[0], partner_pos[1] - vp[1]
+    dist_p = math.sqrt(px * px + py * py)
+
+    # Determine if partner was on the same side of VP as dragged handle
+    dot = px * ndx + py * ndy
+    sign = 1.0 if dot >= 0 else -1.0
+
+    return (vp[0] + ndx * dist_p * sign, vp[1] + ndy * dist_p * sign)
+
+
+def _get_vp_group_for_handle(drag_idx):
+    """Return (vp_group, line_num, partner_name) for a VP handle index, or None."""
+    if drag_idx < 0 or drag_idx > 11:
+        return None
+    vp_group = drag_idx // 4  # 0, 1, or 2
+    local = drag_idx % 4      # 0-3 within group
+    line_num = (local // 2) + 1  # 1 or 2
+    is_start = (local % 2 == 0)
+    prefix = _VP_PREFIXES[vp_group]
+    if is_start:
+        partner_name = f"{prefix}_line{line_num}_end"
+    else:
+        partner_name = f"{prefix}_line{line_num}_start"
+    return (vp_group, line_num, partner_name)
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +282,9 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
     _vp_dragging: bool = False
     _vp_group: int = -1
     _vp_drag_start_snap: dict = {}
+
+    # Alt pivot mode: locked VP intersection
+    _pivot_vp: tuple | None = None
 
     def invoke(self, context, event):
         if context.area.type != 'VIEW_3D':
@@ -306,14 +366,31 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                         nx = max(0.0, min(1.0, nx))
                         ny = max(0.0, min(1.0, ny))
 
-                    # Ctrl+drag: constrain to horizontal or vertical
-                    if event.ctrl:
-                        dx = abs(mx - self._drag_start_screen[0])
-                        dy = abs(my - self._drag_start_screen[1])
-                        if dx >= dy:
-                            ny = self._drag_start_value[1]
-                        else:
-                            nx = self._drag_start_value[0]
+                    # Alt+drag on VP handle: pivot around locked VP
+                    pivot_info = _get_vp_group_for_handle(self._drag_idx)
+                    if event.alt and pivot_info is not None:
+                        vp_group, _line_num, partner_name = pivot_info
+                        # Lock the VP intersection on first Ctrl+Shift frame
+                        if self._pivot_vp is None:
+                            self._pivot_vp = _get_vp_normalized(props, vp_group)
+                        if self._pivot_vp is not None:
+                            partner_val = getattr(props, partner_name)
+                            partner_old = (partner_val[0], partner_val[1])
+                            new_partner = _pivot_adjust_partner(
+                                self._pivot_vp, (nx, ny), partner_old)
+                            if new_partner is not None:
+                                setattr(props, partner_name, new_partner)
+                    else:
+                        # Clear pivot lock when Alt not held
+                        self._pivot_vp = None
+                        # Ctrl+drag: constrain to H or V
+                        if event.ctrl:
+                            dx = abs(mx - self._drag_start_screen[0])
+                            dy = abs(my - self._drag_start_screen[1])
+                            if dx >= dy:
+                                ny = self._drag_start_value[1]
+                            else:
+                                nx = self._drag_start_value[0]
 
                     setattr(props, name, (nx, ny))
 
@@ -374,7 +451,30 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     vp_hover = -1
                 scene["_matchcam_vp_hover"] = vp_hover
 
-                if old_hover != self._hover_idx or old_vp_hover != vp_hover:
+                # Show loupe when Shift is held over a hovered handle
+                old_precision = scene.get("_matchcam_precision", False)
+                if event.shift and self._hover_idx >= 0:
+                    val = getattr(props, CONTROL_POINT_NAMES[self._hover_idx])
+                    hsx, hsy = normalized_to_screen(val[0], val[1], frame)
+                    scene["_matchcam_precision"] = True
+                    scene["_matchcam_drag_screen"] = (hsx, hsy)
+                    scene["_matchcam_drag_idx"] = self._hover_idx
+                elif event.shift and vp_hover >= 0:
+                    vp = _get_vp_normalized(props, vp_hover)
+                    if vp is not None:
+                        vsx, vsy = normalized_to_screen(vp[0], vp[1], frame)
+                        scene["_matchcam_precision"] = True
+                        scene["_matchcam_drag_screen"] = (vsx, vsy)
+                        scene["_matchcam_drag_idx"] = vp_hover * 4
+                    else:
+                        scene["_matchcam_precision"] = False
+                else:
+                    scene["_matchcam_precision"] = False
+
+                need_redraw = (old_hover != self._hover_idx
+                               or old_vp_hover != vp_hover
+                               or old_precision != scene.get("_matchcam_precision", False))
+                if need_redraw:
                     self._tag_redraw(context)
 
                 return {'PASS_THROUGH'}
@@ -418,6 +518,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     self._redo_stack.clear()
                     self._dragging = False
                     self._drag_idx = -1
+                    self._pivot_vp = None
                     scene["_matchcam_precision"] = False
                     scene["_matchcam_drag_idx"] = -1
                     self._tag_redraw(context)
@@ -441,6 +542,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 _run_solver(scene)
                 self._dragging = False
                 self._drag_idx = -1
+                self._pivot_vp = None
                 scene["_matchcam_precision"] = False
                 scene["_matchcam_drag_idx"] = -1
                 self._tag_redraw(context)
@@ -464,6 +566,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 _run_solver(scene)
                 self._dragging = False
                 self._drag_idx = -1
+                self._pivot_vp = None
                 scene["_matchcam_precision"] = False
                 scene["_matchcam_drag_idx"] = -1
                 self._tag_redraw(context)
@@ -478,6 +581,14 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 scene["_matchcam_vp_drag"] = -1
                 self._tag_redraw(context)
                 return {'RUNNING_MODAL'}
+            return {'PASS_THROUGH'}
+
+        # --- Shift release: dismiss loupe when not dragging ---
+        elif event.type in ('LEFT_SHIFT', 'RIGHT_SHIFT') and event.value == 'RELEASE':
+            if not self._dragging and not self._vp_dragging:
+                if scene.get("_matchcam_precision", False):
+                    scene["_matchcam_precision"] = False
+                    self._tag_redraw(context)
             return {'PASS_THROUGH'}
 
         # --- Undo / Redo ---
