@@ -5,6 +5,8 @@ Operators for MatchCam.
 - MATCHCAM_OT_setup: Create camera, load background image
 - MATCHCAM_OT_reset: Reset control points to defaults
 - MATCHCAM_OT_enable: Toggle enable/disable
+- MATCHCAM_OT_lock_camera: Toggle camera transform locks
+- MATCHCAM_OT_keyframe_camera: Insert keyframes on camera
 """
 
 from __future__ import annotations
@@ -137,6 +139,70 @@ def _run_solver(scene):
 
 
 # ---------------------------------------------------------------------------
+# VP intersection helpers
+# ---------------------------------------------------------------------------
+
+_VP_DIAMOND_HIT_RADIUS = 12.0
+
+_VP_PREFIXES = ('vp1', 'vp2', 'vp3')
+
+
+def _line_intersect_2d(s1, e1, s2, e2):
+    """Intersect two infinite 2D lines. Returns (x, y) or None if parallel."""
+    d1x, d1y = e1[0] - s1[0], e1[1] - s1[1]
+    d2x, d2y = e2[0] - s2[0], e2[1] - s2[1]
+    denom = d1x * d2y - d1y * d2x
+    if abs(denom) < 1e-10:
+        return None
+    t = ((s2[0] - s1[0]) * d2y - (s2[1] - s1[1]) * d2x) / denom
+    return (s1[0] + t * d1x, s1[1] + t * d1y)
+
+
+def _get_vp_normalized(props, vp_group):
+    """Compute VP intersection in normalized coords for a VP group (0-2)."""
+    prefix = _VP_PREFIXES[vp_group]
+    s1 = getattr(props, f"{prefix}_line1_start")
+    e1 = getattr(props, f"{prefix}_line1_end")
+    s2 = getattr(props, f"{prefix}_line2_start")
+    e2 = getattr(props, f"{prefix}_line2_end")
+    return _line_intersect_2d(
+        (s1[0], s1[1]), (e1[0], e1[1]),
+        (s2[0], s2[1]), (e2[0], e2[1]),
+    )
+
+
+def _move_vp_to(props, vp_group, target):
+    """Adjust line endpoints so VP group converges at *target* (normalized).
+
+    Each line segment is rotated around its midpoint to point toward the
+    new vanishing point, preserving the segment length.
+    """
+    prefix = _VP_PREFIXES[vp_group]
+    for line_num in (1, 2):
+        s_name = f"{prefix}_line{line_num}_start"
+        e_name = f"{prefix}_line{line_num}_end"
+        s = getattr(props, s_name)
+        e = getattr(props, e_name)
+        s = (s[0], s[1])
+        e = (e[0], e[1])
+
+        mx, my = (s[0] + e[0]) / 2, (s[1] + e[1]) / 2
+        dx, dy = e[0] - s[0], e[1] - s[1]
+        half_len = math.sqrt(dx * dx + dy * dy) / 2
+        if half_len < 1e-6:
+            continue
+
+        vdx, vdy = target[0] - mx, target[1] - my
+        vlen = math.sqrt(vdx * vdx + vdy * vdy)
+        if vlen < 1e-6:
+            continue
+
+        ndx, ndy = vdx / vlen, vdy / vlen
+        setattr(props, s_name, (mx - ndx * half_len, my - ndy * half_len))
+        setattr(props, e_name, (mx + ndx * half_len, my + ndy * half_len))
+
+
+# ---------------------------------------------------------------------------
 # Persistent modal operator
 # ---------------------------------------------------------------------------
 
@@ -154,6 +220,11 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
     _hover_idx: int = -1
     _undo_stack: list = []
     _redo_stack: list = []
+
+    # VP intersection dragging
+    _vp_dragging: bool = False
+    _vp_group: int = -1
+    _vp_drag_start_snap: dict = {}
 
     def invoke(self, context, event):
         if context.area.type != 'VIEW_3D':
@@ -205,7 +276,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
 
         if event.type == 'MOUSEMOVE':
             if self._dragging and self._drag_idx >= 0:
-                # Update the dragged control point
+                # --- Regular control point drag ---
                 name = CONTROL_POINT_NAMES[self._drag_idx]
                 # Skip inactive points
                 if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
@@ -219,7 +290,6 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     self._drag_idx = -1
                 else:
                     if event.shift:
-                        # Precision mode: 1/4 speed relative to last position
                         PRECISION_FACTOR = 0.25
                         last_nx, last_ny = screen_to_normalized(
                             self._last_mouse_screen[0],
@@ -253,21 +323,58 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     scene["_matchcam_drag_screen"] = (handle_sx, handle_sy)
                     scene["_matchcam_drag_idx"] = self._drag_idx
 
-                    # Run solver
                     _run_solver(scene)
-
-                    # Redraw
                     self._tag_redraw(context)
 
                 self._last_mouse_screen = (mx, my)
                 return {'RUNNING_MODAL'}
+
+            elif self._vp_dragging and self._vp_group >= 0:
+                # --- VP intersection drag ---
+                if event.shift:
+                    PRECISION_FACTOR = 0.25
+                    last_nx, last_ny = screen_to_normalized(
+                        self._last_mouse_screen[0],
+                        self._last_mouse_screen[1], frame)
+                    full_nx, full_ny = screen_to_normalized(mx, my, frame)
+                    cur_vp = _get_vp_normalized(props, self._vp_group)
+                    if cur_vp:
+                        nx = cur_vp[0] + (full_nx - last_nx) * PRECISION_FACTOR
+                        ny = cur_vp[1] + (full_ny - last_ny) * PRECISION_FACTOR
+                    else:
+                        nx, ny = screen_to_normalized(mx, my, frame)
+                else:
+                    nx, ny = screen_to_normalized(mx, my, frame)
+
+                _move_vp_to(props, self._vp_group, (nx, ny))
+
+                # Store loupe/precision state
+                vp_sx, vp_sy = normalized_to_screen(nx, ny, frame)
+                scene["_matchcam_precision"] = event.shift
+                scene["_matchcam_drag_screen"] = (vp_sx, vp_sy)
+                # Use first handle index of the VP group for loupe color
+                scene["_matchcam_drag_idx"] = self._vp_group * 4
+
+                _run_solver(scene)
+                self._tag_redraw(context)
+                self._last_mouse_screen = (mx, my)
+                return {'RUNNING_MODAL'}
+
             else:
-                # Update hover state
+                # --- Hover state ---
                 old_hover = self._hover_idx
                 self._hover_idx = self._hit_test(props, mx, my, frame)
                 scene["_matchcam_hover_idx"] = self._hover_idx
 
-                if old_hover != self._hover_idx:
+                # VP hover
+                old_vp_hover = scene.get("_matchcam_vp_hover", -1)
+                if self._hover_idx < 0:
+                    vp_hover = self._vp_hit_test(props, mx, my, frame)
+                else:
+                    vp_hover = -1
+                scene["_matchcam_vp_hover"] = vp_hover
+
+                if old_hover != self._hover_idx or old_vp_hover != vp_hover:
                     self._tag_redraw(context)
 
                 return {'PASS_THROUGH'}
@@ -277,7 +384,6 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 hit = self._hit_test(props, mx, my, frame)
                 if hit >= 0:
                     name = CONTROL_POINT_NAMES[hit]
-                    # Skip ref points if disabled
                     if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
                         return {'PASS_THROUGH'}
                     if name == 'principal_point' and not (props.mode == '2VP' and props.use_custom_pp):
@@ -289,15 +395,25 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     self._drag_start_value = (val[0], val[1])
                     self._drag_start_screen = (mx, my)
                     self._last_mouse_screen = (mx, my)
-                    # Set drag_idx immediately so drawing shows ring style on click
                     scene["_matchcam_drag_idx"] = hit
                     self._tag_redraw(context)
                     return {'RUNNING_MODAL'}
+
+                # Check VP diamond hit
+                vp_hit = self._vp_hit_test(props, mx, my, frame)
+                if vp_hit >= 0:
+                    self._vp_dragging = True
+                    self._vp_group = vp_hit
+                    self._vp_drag_start_snap = _snapshot_points(props)
+                    self._last_mouse_screen = (mx, my)
+                    scene["_matchcam_vp_drag"] = vp_hit
+                    self._tag_redraw(context)
+                    return {'RUNNING_MODAL'}
+
                 return {'PASS_THROUGH'}
 
             elif event.value == 'RELEASE':
                 if self._dragging:
-                    # Push undo snapshot after completing a drag
                     self._undo_stack.append(_snapshot_points(props))
                     self._redo_stack.clear()
                     self._dragging = False
@@ -306,11 +422,20 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     scene["_matchcam_drag_idx"] = -1
                     self._tag_redraw(context)
                     return {'RUNNING_MODAL'}
+                if self._vp_dragging:
+                    self._undo_stack.append(_snapshot_points(props))
+                    self._redo_stack.clear()
+                    self._vp_dragging = False
+                    self._vp_group = -1
+                    scene["_matchcam_precision"] = False
+                    scene["_matchcam_drag_idx"] = -1
+                    scene["_matchcam_vp_drag"] = -1
+                    self._tag_redraw(context)
+                    return {'RUNNING_MODAL'}
                 return {'PASS_THROUGH'}
 
         elif event.type == 'RIGHTMOUSE' and event.value == 'PRESS':
             if self._dragging and self._drag_idx >= 0:
-                # Cancel drag - restore original value (no undo push)
                 name = CONTROL_POINT_NAMES[self._drag_idx]
                 setattr(props, name, self._drag_start_value)
                 _run_solver(scene)
@@ -320,11 +445,20 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 scene["_matchcam_drag_idx"] = -1
                 self._tag_redraw(context)
                 return {'RUNNING_MODAL'}
+            if self._vp_dragging:
+                _restore_snapshot(props, self._vp_drag_start_snap)
+                _run_solver(scene)
+                self._vp_dragging = False
+                self._vp_group = -1
+                scene["_matchcam_precision"] = False
+                scene["_matchcam_drag_idx"] = -1
+                scene["_matchcam_vp_drag"] = -1
+                self._tag_redraw(context)
+                return {'RUNNING_MODAL'}
             return {'PASS_THROUGH'}
 
         elif event.type == 'ESC' and event.value == 'PRESS':
             if self._dragging and self._drag_idx >= 0:
-                # Cancel drag - restore original value (no undo push)
                 name = CONTROL_POINT_NAMES[self._drag_idx]
                 setattr(props, name, self._drag_start_value)
                 _run_solver(scene)
@@ -332,6 +466,16 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 self._drag_idx = -1
                 scene["_matchcam_precision"] = False
                 scene["_matchcam_drag_idx"] = -1
+                self._tag_redraw(context)
+                return {'RUNNING_MODAL'}
+            if self._vp_dragging:
+                _restore_snapshot(props, self._vp_drag_start_snap)
+                _run_solver(scene)
+                self._vp_dragging = False
+                self._vp_group = -1
+                scene["_matchcam_precision"] = False
+                scene["_matchcam_drag_idx"] = -1
+                scene["_matchcam_vp_drag"] = -1
                 self._tag_redraw(context)
                 return {'RUNNING_MODAL'}
             return {'PASS_THROUGH'}
@@ -339,7 +483,6 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
         # --- Undo / Redo ---
         elif event.type == 'Z' and event.value == 'PRESS' and event.ctrl:
             if event.shift:
-                # Redo
                 if self._redo_stack:
                     self._undo_stack.append(_snapshot_points(props))
                     snap = self._redo_stack.pop()
@@ -348,7 +491,6 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     self._tag_redraw(context)
                 return {'RUNNING_MODAL'}
             else:
-                # Undo
                 if len(self._undo_stack) > 1:
                     self._redo_stack.append(self._undo_stack.pop())
                     snap = self._undo_stack[-1]
@@ -365,7 +507,6 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
         best_idx = -1
 
         is_3vp = (props.mode == '3VP')
-
         pp_active = (props.mode == '2VP' and props.use_custom_pp)
 
         for i, name in enumerate(CONTROL_POINT_NAMES):
@@ -386,6 +527,30 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
 
         return best_idx
 
+    def _vp_hit_test(self, props, mx, my, frame) -> int:
+        """Check if mouse is near a VP diamond. Returns group (0-2) or -1."""
+        is_3vp = (props.mode == '3VP')
+        groups = [0, 1] + ([2] if is_3vp else [])
+
+        best_dist = _VP_DIAMOND_HIT_RADIUS
+        best_group = -1
+
+        for g in groups:
+            vp = _get_vp_normalized(props, g)
+            if vp is None:
+                continue
+            sx, sy = normalized_to_screen(vp[0], vp[1], frame)
+            # Only test VPs that are reasonably on-screen
+            region = bpy.context.region
+            if not (-500 < sx < region.width + 500 and -500 < sy < region.height + 500):
+                continue
+            dist = math.sqrt((mx - sx) ** 2 + (my - sy) ** 2)
+            if dist < best_dist:
+                best_dist = dist
+                best_group = g
+
+        return best_group
+
     def _tag_redraw(self, context):
         for area in context.screen.areas:
             if area.type == 'VIEW_3D':
@@ -396,6 +561,8 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
         context.scene["_matchcam_hover_idx"] = -1
         context.scene["_matchcam_precision"] = False
         context.scene["_matchcam_drag_idx"] = -1
+        context.scene["_matchcam_vp_hover"] = -1
+        context.scene["_matchcam_vp_drag"] = -1
         self._tag_redraw(context)
 
     def cancel(self, context):
@@ -512,7 +679,7 @@ class MATCHCAM_OT_setup(bpy.types.Operator):
 
 
 # ---------------------------------------------------------------------------
-# Reset operator
+# Reset operators
 # ---------------------------------------------------------------------------
 
 class MATCHCAM_OT_reset(bpy.types.Operator):
@@ -550,6 +717,59 @@ class MATCHCAM_OT_reset_origin(bpy.types.Operator):
 
 
 # ---------------------------------------------------------------------------
+# Lock camera
+# ---------------------------------------------------------------------------
+
+class MATCHCAM_OT_lock_camera(bpy.types.Operator):
+    """Toggle camera transform locks (location, rotation)"""
+    bl_idname = "matchcam.lock_camera"
+    bl_label = "Lock Camera"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        cam = context.scene.camera
+        if cam is None:
+            self.report({'WARNING'}, "No camera")
+            return {'CANCELLED'}
+
+        is_locked = all(cam.lock_location) and all(cam.lock_rotation)
+        new_state = not is_locked
+
+        cam.lock_location = (new_state, new_state, new_state)
+        cam.lock_rotation = (new_state, new_state, new_state)
+        cam.lock_rotation_w = new_state
+        cam.lock_scale = (new_state, new_state, new_state)
+
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Keyframe camera
+# ---------------------------------------------------------------------------
+
+class MATCHCAM_OT_keyframe_camera(bpy.types.Operator):
+    """Insert keyframes for camera location, rotation, focal length, and shift"""
+    bl_idname = "matchcam.keyframe_camera"
+    bl_label = "Keyframe Camera"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        cam = context.scene.camera
+        if cam is None:
+            self.report({'WARNING'}, "No camera")
+            return {'CANCELLED'}
+
+        cam.keyframe_insert(data_path="location")
+        cam.keyframe_insert(data_path="rotation_quaternion")
+        cam.data.keyframe_insert(data_path="lens")
+        cam.data.keyframe_insert(data_path="shift_x")
+        cam.data.keyframe_insert(data_path="shift_y")
+
+        self.report({'INFO'}, f"Keyframed camera at frame {context.scene.frame_current}")
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
@@ -559,6 +779,8 @@ classes = (
     MATCHCAM_OT_setup,
     MATCHCAM_OT_reset,
     MATCHCAM_OT_reset_origin,
+    MATCHCAM_OT_lock_camera,
+    MATCHCAM_OT_keyframe_camera,
 )
 
 

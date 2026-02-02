@@ -99,6 +99,17 @@ class MATCHCAM_PT_main(bpy.types.Panel):
 
         layout.separator()
 
+        # Camera actions
+        if scene.camera is not None:
+            row = layout.row(align=True)
+            is_locked = all(scene.camera.lock_location) and all(scene.camera.lock_rotation)
+            lock_icon = 'LOCKED' if is_locked else 'UNLOCKED'
+            lock_text = "Unlock" if is_locked else "Lock"
+            row.operator("matchcam.lock_camera", text=lock_text, icon=lock_icon, depress=is_locked)
+            row.operator("matchcam.keyframe_camera", text="Keyframe", icon='KEYTYPE_KEYFRAME_VEC')
+
+        layout.separator()
+
         # Reset
         row = layout.row(align=True)
         row.operator("matchcam.reset", icon='FILE_REFRESH')

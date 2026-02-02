@@ -586,8 +586,15 @@ def _draw_principal_point(props, frame, hover_idx):
 # ---------------------------------------------------------------------------
 
 def _draw_vp_indicators(props, frame, is_3vp):
-    """Draw small diamonds at the computed vanishing point positions."""
-    cam = bpy.context.scene.camera
+    """Draw small diamonds at the computed vanishing point positions.
+
+    Diamonds grow and brighten on hover and switch to ring+dot when dragged.
+    """
+    scene = bpy.context.scene
+    vp_hover = scene.get("_matchcam_vp_hover", -1)
+    vp_drag = scene.get("_matchcam_vp_drag", -1)
+
+    cam = scene.camera
     if cam is None:
         return
 
@@ -619,13 +626,13 @@ def _draw_vp_indicators(props, frame, is_3vp):
     fu = _vp_from_lines('vp1_line1_start', 'vp1_line1_end', 'vp1_line2_start', 'vp1_line2_end')
     fv = _vp_from_lines('vp2_line1_start', 'vp2_line1_end', 'vp2_line2_start', 'vp2_line2_end')
 
-    vp_list = [(fu, COL_VP1_LINE), (fv, COL_VP2_LINE)]
+    vp_list = [(0, fu, COL_VP1_LINE), (1, fv, COL_VP2_LINE)]
 
     if is_3vp:
         fw_vp = _vp_from_lines('vp3_line1_start', 'vp3_line1_end', 'vp3_line2_start', 'vp3_line2_end')
-        vp_list.append((fw_vp, COL_VP3_LINE))
+        vp_list.append((2, fw_vp, COL_VP3_LINE))
 
-    for vp, col in vp_list:
+    for idx, vp, col in vp_list:
         if vp is None:
             continue
 
@@ -633,7 +640,20 @@ def _draw_vp_indicators(props, frame, is_3vp):
         sx, sy = normalized_to_screen(rel[0], rel[1], frame)
 
         region = bpy.context.region
-        if -500 < sx < region.width + 500 and -500 < sy < region.height + 500:
+        if not (-500 < sx < region.width + 500 and -500 < sy < region.height + 500):
+            continue
+
+        is_hover = (idx == vp_hover)
+        is_drag = (idx == vp_drag)
+
+        if is_drag:
+            # Ring + center dot when being dragged
+            ring_r = HANDLE_HOVER_RADIUS * 2
+            _draw_aa_annulus(sx, sy, ring_r - 1.0, ring_r + 1.0, (*col[:3], 1.0), segments=32)
+            _draw_aa_circle(sx, sy, 2.0, (*col[:3], 1.0), segments=12)
+        elif is_hover:
+            _draw_aa_diamond(sx, sy, 8.0, (*col[:3], 1.0))
+        else:
             _draw_aa_diamond(sx, sy, 6.0, (*col[:3], 0.7))
 
 
