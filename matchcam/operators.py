@@ -188,7 +188,16 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
         frame = get_camera_frame_px(context)
 
         if frame is None:
-            # Not in camera view - pass through but stay alive
+            # Not in camera view - auto-return to camera view so the user
+            # doesn't lose the overlay after accidentally orbiting away.
+            if scene.camera is not None:
+                for area in context.screen.areas:
+                    if area.type == 'VIEW_3D':
+                        for space in area.spaces:
+                            if space.type == 'VIEW_3D':
+                                if space.region_3d.view_perspective != 'CAMERA':
+                                    space.region_3d.view_perspective = 'CAMERA'
+                        break
             return {'PASS_THROUGH'}
 
         mx, my = event.mouse_region_x, event.mouse_region_y

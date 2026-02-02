@@ -27,51 +27,51 @@ class MatchCamProperties(bpy.types.PropertyGroup):
         default='2VP',
     )
 
-    # VP1 - first pair of convergence lines
+    # VP1 (X, red) - right side lines converging to the right, off-screen
     vp1_line1_start: FloatVectorProperty(
-        name="VP1 Line1 Start", size=2, default=(0.3, 0.35),
+        name="VP1 Line1 Start", size=2, default=(0.45, 0.52),
     )
     vp1_line1_end: FloatVectorProperty(
-        name="VP1 Line1 End", size=2, default=(0.7, 0.4),
+        name="VP1 Line1 End", size=2, default=(0.85, 0.59),
     )
     vp1_line2_start: FloatVectorProperty(
-        name="VP1 Line2 Start", size=2, default=(0.3, 0.65),
+        name="VP1 Line2 Start", size=2, default=(0.45, 0.80),
     )
     vp1_line2_end: FloatVectorProperty(
-        name="VP1 Line2 End", size=2, default=(0.7, 0.6),
+        name="VP1 Line2 End", size=2, default=(0.85, 0.74),
     )
 
-    # VP2 - second pair of convergence lines
+    # VP2 (Y, green) - left side lines converging to the left, just off edge
     vp2_line1_start: FloatVectorProperty(
-        name="VP2 Line1 Start", size=2, default=(0.35, 0.3),
+        name="VP2 Line1 Start", size=2, default=(0.15, 0.60),
     )
     vp2_line1_end: FloatVectorProperty(
-        name="VP2 Line1 End", size=2, default=(0.4, 0.7),
+        name="VP2 Line1 End", size=2, default=(0.55, 0.52),
     )
     vp2_line2_start: FloatVectorProperty(
-        name="VP2 Line2 Start", size=2, default=(0.65, 0.3),
+        name="VP2 Line2 Start", size=2, default=(0.15, 0.73),
     )
     vp2_line2_end: FloatVectorProperty(
-        name="VP2 Line2 End", size=2, default=(0.6, 0.7),
+        name="VP2 Line2 End", size=2, default=(0.55, 0.81),
     )
 
-    # VP3 - third pair of convergence lines (for 3VP mode)
+    # VP3 (Z, blue) - near-vertical lines converging far above
     vp3_line1_start: FloatVectorProperty(
-        name="VP3 Line1 Start", size=2, default=(0.34, 0.61),
+        name="VP3 Line1 Start", size=2, default=(0.40, 0.85),
     )
     vp3_line1_end: FloatVectorProperty(
-        name="VP3 Line1 End", size=2, default=(0.31, 0.31),
+        name="VP3 Line1 End", size=2, default=(0.43, 0.35),
     )
     vp3_line2_start: FloatVectorProperty(
-        name="VP3 Line2 Start", size=2, default=(0.68, 0.61),
+        name="VP3 Line2 Start", size=2, default=(0.60, 0.85),
     )
     vp3_line2_end: FloatVectorProperty(
-        name="VP3 Line2 End", size=2, default=(0.71, 0.35),
+        name="VP3 Line2 End", size=2, default=(0.57, 0.35),
     )
 
     # Origin point - where the world origin projects onto the image
     origin_point: FloatVectorProperty(
-        name="Origin Point", size=2, default=(0.5, 0.5),
+        name="Origin Point", size=2, default=(0.50, 0.75),
     )
 
     # Axis assignment
@@ -112,10 +112,10 @@ class MatchCamProperties(bpy.types.PropertyGroup):
         unit='LENGTH',
     )
     ref_point_a: FloatVectorProperty(
-        name="Ref Point A", size=2, default=(0.4, 0.5),
+        name="Ref Point A", size=2, default=(0.40, 0.70),
     )
     ref_point_b: FloatVectorProperty(
-        name="Ref Point B", size=2, default=(0.6, 0.5),
+        name="Ref Point B", size=2, default=(0.60, 0.70),
     )
 
     # Principal point (manual override, only used in 2VP mode)
@@ -141,23 +141,23 @@ CONTROL_POINT_NAMES = [
     "ref_point_a", "ref_point_b",
 ]
 
-# Default values for resetting
+# Default values for resetting (3/4 angle, horizon at bottom third)
 CONTROL_POINT_DEFAULTS = {
-    "vp1_line1_start": (0.3, 0.35),
-    "vp1_line1_end": (0.7, 0.4),
-    "vp1_line2_start": (0.3, 0.65),
-    "vp1_line2_end": (0.7, 0.6),
-    "vp2_line1_start": (0.35, 0.3),
-    "vp2_line1_end": (0.4, 0.7),
-    "vp2_line2_start": (0.65, 0.3),
-    "vp2_line2_end": (0.6, 0.7),
-    "vp3_line1_start": (0.34, 0.61),
-    "vp3_line1_end": (0.31, 0.31),
-    "vp3_line2_start": (0.68, 0.61),
-    "vp3_line2_end": (0.71, 0.35),
-    "origin_point": (0.5, 0.5),
-    "ref_point_a": (0.4, 0.5),
-    "ref_point_b": (0.6, 0.5),
+    "vp1_line1_start": (0.45, 0.52),
+    "vp1_line1_end": (0.85, 0.59),
+    "vp1_line2_start": (0.45, 0.80),
+    "vp1_line2_end": (0.85, 0.74),
+    "vp2_line1_start": (0.15, 0.60),
+    "vp2_line1_end": (0.55, 0.52),
+    "vp2_line2_start": (0.15, 0.73),
+    "vp2_line2_end": (0.55, 0.81),
+    "vp3_line1_start": (0.40, 0.85),
+    "vp3_line1_end": (0.43, 0.35),
+    "vp3_line2_start": (0.60, 0.85),
+    "vp3_line2_end": (0.57, 0.35),
+    "origin_point": (0.50, 0.75),
+    "ref_point_a": (0.40, 0.70),
+    "ref_point_b": (0.60, 0.70),
 }
 
 # Names grouped by VP for drawing/interaction filtering
