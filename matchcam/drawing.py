@@ -21,18 +21,18 @@ from . import solver as solv
 # Colors
 # ---------------------------------------------------------------------------
 
-COL_VP1_LINE = (0.95, 0.2, 0.2, 0.9)       # red (X)
-COL_VP1_LINE_EXT = (0.95, 0.2, 0.2, 0.3)
+COL_VP1_LINE = (0.95, 0.2, 0.2, 0.8)       # red (X)
+COL_VP1_LINE_EXT = (0.95, 0.2, 0.2, 0.15)
 COL_VP1_HANDLE = (1.0, 0.3, 0.3, 1.0)
 COL_VP1_HANDLE_HOVER = (1.0, 0.6, 0.5, 1.0)
 
-COL_VP2_LINE = (0.2, 0.85, 0.2, 0.9)       # green (Y)
-COL_VP2_LINE_EXT = (0.2, 0.85, 0.2, 0.3)
+COL_VP2_LINE = (0.2, 0.85, 0.2, 0.8)       # green (Y)
+COL_VP2_LINE_EXT = (0.2, 0.85, 0.2, 0.15)
 COL_VP2_HANDLE = (0.3, 0.9, 0.3, 1.0)
 COL_VP2_HANDLE_HOVER = (0.6, 1.0, 0.6, 1.0)
 
-COL_VP3_LINE = (0.2, 0.5, 0.95, 0.9)       # blue (Z)
-COL_VP3_LINE_EXT = (0.2, 0.5, 0.95, 0.3)
+COL_VP3_LINE = (0.2, 0.5, 0.95, 0.8)       # blue (Z)
+COL_VP3_LINE_EXT = (0.2, 0.5, 0.95, 0.15)
 COL_VP3_HANDLE = (0.3, 0.6, 1.0, 1.0)
 COL_VP3_HANDLE_HOVER = (0.5, 0.8, 1.0, 1.0)
 
@@ -43,6 +43,10 @@ COL_REF_LINE = (0.9, 0.9, 0.2, 0.8)
 COL_REF_HANDLE = (1.0, 1.0, 0.3, 1.0)
 COL_REF_HANDLE_HOVER = (1.0, 1.0, 0.7, 1.0)
 
+COL_PP = (1.0, 1.0, 1.0, 0.9)           # white for principal point
+COL_PP_HOVER = (1.0, 1.0, 1.0, 1.0)
+COL_PP_CROSSHAIR = (1.0, 1.0, 1.0, 0.5)
+
 HANDLE_RADIUS = 7.0
 HANDLE_HOVER_RADIUS = 9.0
 LOUPE_RADIUS = 48.0
@@ -50,7 +54,7 @@ LOUPE_CROSSHAIR_SIZE = 4.0
 LOUPE_BORDER_WIDTH = 2.0
 LOUPE_MAGNIFICATION = 4.0
 LOUPE_SEGMENTS = 64
-LINE_WIDTH = 2.0
+LINE_WIDTH = 1.5
 AA_FRINGE = 1.0  # anti-aliasing feather width in pixels
 
 
@@ -58,8 +62,12 @@ AA_FRINGE = 1.0  # anti-aliasing feather width in pixels
 # Anti-aliased drawing primitives
 # ---------------------------------------------------------------------------
 
-def _draw_aa_line(p1, p2, color, width=LINE_WIDTH):
-    """Draw an anti-aliased line as a quad with feathered edges."""
+def _draw_aa_line(p1, p2, color, width=LINE_WIDTH, color_end=None):
+    """Draw an anti-aliased line as a quad with feathered edges.
+
+    If *color_end* is given the line linearly interpolates from *color*
+    at p1 to *color_end* at p2.
+    """
     dx = p2[0] - p1[0]
     dy = p2[1] - p1[1]
     length = math.sqrt(dx * dx + dy * dy)
@@ -72,8 +80,10 @@ def _draw_aa_line(p1, p2, color, width=LINE_WIDTH):
     hw = width / 2.0
     aa = AA_FRINGE
 
-    inner_color = tuple(color)
-    outer_color = (color[0], color[1], color[2], 0.0)
+    c1 = tuple(color)
+    c2 = tuple(color_end) if color_end is not None else c1
+    c1_outer = (c1[0], c1[1], c1[2], 0.0)
+    c2_outer = (c2[0], c2[1], c2[2], 0.0)
 
     verts = [
         (p1[0] + nx * (hw + aa), p1[1] + ny * (hw + aa)),
@@ -87,8 +97,8 @@ def _draw_aa_line(p1, p2, color, width=LINE_WIDTH):
     ]
 
     colors = [
-        outer_color, inner_color, inner_color, outer_color,
-        outer_color, inner_color, inner_color, outer_color,
+        c1_outer, c1, c1, c1_outer,
+        c2_outer, c2, c2, c2_outer,
     ]
 
     indices = [
@@ -315,6 +325,7 @@ def draw_callback(context):
         return
 
     hover_idx = scene.get("_matchcam_hover_idx", -1)
+    drag_idx = scene.get("_matchcam_drag_idx", -1)
     is_3vp = (props.mode == '3VP')
 
     gpu.state.blend_set('ALPHA')
@@ -356,14 +367,22 @@ def draw_callback(context):
 
     from .properties import CONTROL_POINT_NAMES
 
+    pp_active = (props.mode == '2VP' and props.use_custom_pp)
+
+    # Determine if a VP handle is currently being dragged
+    is_vp_dragging = (0 <= drag_idx <= 11)
+
     for i, name in enumerate(CONTROL_POINT_NAMES):
         if name in vp3_names and not is_3vp:
             continue
         if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
             continue
+        if name == 'principal_point':
+            continue  # drawn separately as reticle
 
         pos = _pt(name)
         is_hover = (i == hover_idx)
+        is_vp_handle = name in vp1_names or name in vp2_names or name in vp3_names
 
         if name in vp1_names:
             col = COL_VP1_HANDLE_HOVER if is_hover else COL_VP1_HANDLE
@@ -373,14 +392,30 @@ def draw_callback(context):
             col = COL_VP3_HANDLE_HOVER if is_hover else COL_VP3_HANDLE
         elif name == 'origin_point':
             col = COL_ORIGIN_HOVER if is_hover else COL_ORIGIN
+            # Origin: 2x radius, stroke ring only (no fill), 2px stroke
+            origin_r = HANDLE_HOVER_RADIUS * 2 if is_hover else HANDLE_RADIUS * 2
+            _draw_aa_annulus(pos[0], pos[1], origin_r - 1.0, origin_r + 1.0, col, segments=32)
+            continue
         else:
             col = COL_REF_HANDLE_HOVER if is_hover else COL_REF_HANDLE
 
         radius = HANDLE_HOVER_RADIUS if is_hover else HANDLE_RADIUS
-        _draw_aa_circle(pos[0], pos[1], radius, col)
+
+        if is_vp_handle and is_vp_dragging:
+            # Ring style (no fill, just border) matching origin handle,
+            # with a small center dot, retaining axis colors
+            ring_r = HANDLE_HOVER_RADIUS * 2 if (i == drag_idx) else HANDLE_RADIUS * 2
+            _draw_aa_annulus(pos[0], pos[1], ring_r - 1.0, ring_r + 1.0, col, segments=32)
+            _draw_aa_circle(pos[0], pos[1], 2.0, col, segments=12)
+        else:
+            _draw_aa_circle(pos[0], pos[1], radius, col)
 
     # --- Draw VP indicators ---
     _draw_vp_indicators(props, frame, is_3vp)
+
+    # --- Draw principal point indicator (2VP + custom PP only) ---
+    if pp_active:
+        _draw_principal_point(props, frame, hover_idx)
 
     # --- Draw precision loupe (on top of everything) ---
     if scene.get("_matchcam_precision", False):
@@ -393,19 +428,22 @@ def draw_callback(context):
 
 
 def _draw_aa_line_pair(s1, e1, s2, e2, color, ext_color):
-    """Draw two line segments with AA extensions showing convergence."""
+    """Draw two line segments with AA extensions that fade to transparent."""
     _draw_aa_line(s1, e1, color)
     _draw_aa_line(s2, e2, color)
+
+    # Extension color fades linearly from ext_color to fully transparent
+    ext_transparent = (ext_color[0], ext_color[1], ext_color[2], 0.0)
 
     def _extend(a, b, factor=1.5):
         dx = b[0] - a[0]
         dy = b[1] - a[1]
         return (b[0] + dx * factor, b[1] + dy * factor)
 
-    _draw_aa_line(e1, _extend(s1, e1), ext_color)
-    _draw_aa_line(s1, _extend(e1, s1), ext_color)
-    _draw_aa_line(e2, _extend(s2, e2), ext_color)
-    _draw_aa_line(s2, _extend(e2, s2), ext_color)
+    _draw_aa_line(e1, _extend(s1, e1), ext_color, color_end=ext_transparent)
+    _draw_aa_line(s1, _extend(e1, s1), ext_color, color_end=ext_transparent)
+    _draw_aa_line(e2, _extend(s2, e2), ext_color, color_end=ext_transparent)
+    _draw_aa_line(s2, _extend(e2, s2), ext_color, color_end=ext_transparent)
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +460,8 @@ def _get_loupe_color(drag_idx):
         return COL_VP3_LINE[:3]   # blue
     elif drag_idx == 12:
         return COL_ORIGIN[:3]     # yellow
+    elif drag_idx == 15:
+        return COL_PP[:3]         # white (principal point)
     else:
         return COL_REF_LINE[:3]   # yellow
 
@@ -515,6 +555,35 @@ def _draw_loupe(cx, cy, frame, drag_idx):
 
     # Center dot
     _draw_aa_circle(rcx, rcy, 1.0, crosshair_color, segments=12)
+
+
+# ---------------------------------------------------------------------------
+# Principal point indicator
+# ---------------------------------------------------------------------------
+
+def _draw_principal_point(props, frame, hover_idx):
+    """Draw a crosshair reticle at the custom principal point location."""
+    from .properties import CONTROL_POINT_NAMES
+    pp_idx = CONTROL_POINT_NAMES.index("principal_point")
+    is_hover = (hover_idx == pp_idx)
+
+    pp = props.principal_point
+    sx, sy = normalized_to_screen(pp[0], pp[1], frame)
+
+    col = COL_PP_HOVER if is_hover else COL_PP
+    cross_col = (1.0, 1.0, 1.0, 0.7) if is_hover else COL_PP_CROSSHAIR
+
+    # Crosshair lines (14px arms when hovered, 12px normal)
+    arm = 14.0 if is_hover else 12.0
+    _draw_aa_line((sx - arm, sy), (sx + arm, sy), cross_col, width=1.0)
+    _draw_aa_line((sx, sy - arm), (sx, sy + arm), cross_col, width=1.0)
+
+    # Center circle
+    _draw_aa_circle(sx, sy, 3.0, col)
+
+    # Outer ring
+    ring_r = 7.0 if is_hover else 6.0
+    _draw_aa_annulus(sx, sy, ring_r - 1.0, ring_r, col, segments=32)
 
 
 # ---------------------------------------------------------------------------

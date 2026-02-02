@@ -21,20 +21,43 @@ class MATCHCAM_PT_main(bpy.types.Panel):
 
         # Enable toggle
         row = layout.row()
+        row.scale_y = 1.905
         icon = 'PAUSE' if props.enabled else 'PLAY'
         text = "Disable" if props.enabled else "Enable"
         row.operator("matchcam.enable", text=text, icon=icon, depress=props.enabled)
 
         layout.separator()
 
-        # Setup
-        layout.operator("matchcam.setup", icon='IMAGE_DATA')
+        # Camera section
+        box = layout.box()
+        box.label(text="Camera", icon='CAMERA_DATA')
+
+        row = box.row(align=True)
+        row.label(text="Camera:")
+        row.prop(props, "target_camera", text="")
+
+        # Warn if selected camera has an existing background image
+        target = props.target_camera
+        if target != '__NEW__':
+            cam_obj = bpy.data.objects.get(target)
+            if cam_obj and cam_obj.type == 'CAMERA' and cam_obj.data.background_images:
+                if any(bg.image for bg in cam_obj.data.background_images):
+                    warn_row = box.row()
+                    warn_row.alert = True
+                    warn_row.label(text="Existing background will be replaced!", icon='ERROR')
+
+        row = box.row()
+        row.scale_y = 1.5
+        row.operator("matchcam.setup", icon='IMAGE_DATA')
+
+        # Background opacity
+        box.prop(props, "bg_alpha", slider=True)
 
         layout.separator()
 
         # Mode: 2VP / 3VP
         box = layout.box()
-        box.label(text="Mode", icon='VIEW_CAMERA')
+        box.label(text="Mode", icon='OBJECT_DATA')
         row = box.row(align=True)
         row.prop(props, "mode", expand=True)
 
@@ -60,8 +83,9 @@ class MATCHCAM_PT_main(bpy.types.Panel):
         # Principal point (only in 2VP mode - in 3VP it's auto-derived)
         if props.mode == '2VP':
             box = layout.box()
-            box.prop(props, "use_custom_pp", text="Custom Principal Point")
+            box.prop(props, "use_custom_pp", text="Custom Optical Center")
             if props.use_custom_pp:
+                box.label(text="Lens optical center on image", icon='INFO')
                 row = box.row()
                 row.prop(props, "principal_point", index=0, text="X")
                 row.prop(props, "principal_point", index=1, text="Y")
@@ -88,10 +112,16 @@ class MATCHCAM_PT_main(bpy.types.Panel):
         if not props.enabled:
             box.label(text="Disabled")
         elif scene.camera is None:
-            box.label(text="No camera - run Setup first")
+            row = box.row()
+            row.alert = True
+            row.label(text="No camera - run Setup first", icon='ERROR')
         elif not is_valid:
-            box.label(text="Invalid configuration", icon='ERROR')
-            box.label(text="Adjust lines so they converge")
+            row = box.row()
+            row.alert = True
+            row.label(text="Invalid configuration", icon='ERROR')
+            row = box.row()
+            row.alert = True
+            row.label(text="Adjust lines so they converge")
         else:
             focal = scene.get('_matchcam_focal_mm', 0)
             hfov = scene.get('_matchcam_hfov', 0)

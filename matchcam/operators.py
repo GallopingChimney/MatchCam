@@ -78,7 +78,7 @@ def _run_solver(scene):
     if aspect is None:
         return
 
-    pp = (props.principal_point[0], props.principal_point[1]) if props.use_custom_pp else (0.5, 0.5)
+    pp = (props.principal_point[0], props.principal_point[1]) if (props.use_custom_pp and props.mode == '2VP') else (0.5, 0.5)
 
     # Build solver kwargs
     solver_kwargs = dict(
@@ -214,6 +214,9 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 elif name in VP3_POINT_NAMES and props.mode != '3VP':
                     self._dragging = False
                     self._drag_idx = -1
+                elif name == 'principal_point' and not (props.mode == '2VP' and props.use_custom_pp):
+                    self._dragging = False
+                    self._drag_idx = -1
                 else:
                     if event.shift:
                         # Precision mode: 1/4 speed relative to last position
@@ -275,6 +278,8 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     name = CONTROL_POINT_NAMES[hit]
                     # Skip ref points if disabled
                     if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
+                        return {'PASS_THROUGH'}
+                    if name == 'principal_point' and not (props.mode == '2VP' and props.use_custom_pp):
                         return {'PASS_THROUGH'}
 
                     self._dragging = True
@@ -357,10 +362,14 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
 
         is_3vp = (props.mode == '3VP')
 
+        pp_active = (props.mode == '2VP' and props.use_custom_pp)
+
         for i, name in enumerate(CONTROL_POINT_NAMES):
             if name in VP3_POINT_NAMES and not is_3vp:
                 continue
             if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
+                continue
+            if name == 'principal_point' and not pp_active:
                 continue
 
             val = getattr(props, name)
@@ -444,12 +453,21 @@ class MATCHCAM_OT_setup(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
+        props = scene.matchcam
 
-        # Create camera if needed
-        if scene.camera is None:
+        # Determine target camera from selection
+        target = props.target_camera
+
+        if target == '__NEW__':
             cam_data = bpy.data.cameras.new("MatchCam Camera")
             cam_obj = bpy.data.objects.new("MatchCam Camera", cam_data)
             scene.collection.objects.link(cam_obj)
+            scene.camera = cam_obj
+        else:
+            cam_obj = bpy.data.objects.get(target)
+            if cam_obj is None or cam_obj.type != 'CAMERA':
+                self.report({'ERROR'}, f"Camera '{target}' not found")
+                return {'CANCELLED'}
             scene.camera = cam_obj
 
         cam = scene.camera
@@ -467,7 +485,7 @@ class MATCHCAM_OT_setup(bpy.types.Operator):
 
         bg = cam_data.background_images.new()
         bg.image = img
-        bg.alpha = 1.0
+        bg.alpha = props.bg_alpha
         bg.display_depth = 'BACK'
 
         # Match render resolution to image

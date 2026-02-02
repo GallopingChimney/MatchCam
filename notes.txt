@@ -1,5 +1,15 @@
-distance slider needs to update realtime
+revert the Mode icon.
 
-should have exposed slider for background image opacity, default to 87%
+make the camera dropdown box occupy more of the row.
 
-camera smart selection. if at least one camera exists, provide option to choose which camera to configure, or create new camera. anticipate users forced errors such as a camera already having a background image, provide user with option to cancel or replace.
+put the camera setup button below background opacity. make it the same size as the Enable/disable button.
+
+the line fade looks great
+
+make it such that only the VP being dragged changes to the dragged state. also make it so it changes on click, not just on drag, such that it persists from click start, through to drag end.
+
+update status box such that if no camera is set up, it should display that too. also, the line configurations should at any point be accurately reflected in the status box, ie, if theyre fine, the status box should not at any point report that theyre not. it should be aware which mode its in too.
+
+it would be great if the camera translate element could move outside the camera frame. right now its boxed in, pun intended.
+
+as for the colored icons, the ones being used right now arent coloured. what about the ones that are used in blenders outliner? for example, object contents icons appear green, objects appear orange, materials red etc. have a gander.

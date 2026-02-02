@@ -7,6 +7,71 @@ from bpy.props import (
 )
 
 
+def _on_solver_property_update(self, context):
+    """Re-run solver when a solver-affecting property changes."""
+    from .operators import _run_solver
+    if self.enabled:
+        _run_solver(context.scene)
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+
+
+def _on_ref_distance_update(self, context):
+    """Re-run solver when reference distance slider changes."""
+    from .operators import _run_solver
+    if self.enabled and self.ref_distance_enabled:
+        _run_solver(context.scene)
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+
+
+def _on_bg_alpha_update(self, context):
+    """Update camera background image opacity in real time."""
+    cam = context.scene.camera
+    if cam and cam.data.background_images:
+        for bg in cam.data.background_images:
+            bg.alpha = self.bg_alpha
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+
+
+_camera_items_ref = []
+
+
+def _get_camera_items(self, context):
+    """Dynamic enum items: list existing cameras + 'New Camera' option."""
+    global _camera_items_ref
+    items = []
+    scene_cam = context.scene.camera
+    idx = 0
+
+    # Current scene camera first (if any)
+    if scene_cam and scene_cam.type == 'CAMERA':
+        has_bg = bool(scene_cam.data.background_images and
+                      any(bg.image for bg in scene_cam.data.background_images))
+        desc = "Active camera (has background)" if has_bg else "Active camera"
+        items.append((scene_cam.name, scene_cam.name, desc, 'CAMERA_DATA', idx))
+        idx += 1
+
+    # Other cameras
+    for obj in bpy.data.objects:
+        if obj.type == 'CAMERA' and obj != scene_cam:
+            has_bg = bool(obj.data.background_images and
+                          any(bg.image for bg in obj.data.background_images))
+            desc = "Has background image" if has_bg else "No background image"
+            items.append((obj.name, obj.name, desc, 'CAMERA_DATA', idx))
+            idx += 1
+
+    # New camera option at end
+    items.append(('__NEW__', "New Camera", "Create a new camera", 'ADD', idx))
+
+    _camera_items_ref = items
+    return _camera_items_ref
+
+
 class MatchCamProperties(bpy.types.PropertyGroup):
     """Properties for MatchCam camera matching."""
 
@@ -25,6 +90,7 @@ class MatchCamProperties(bpy.types.PropertyGroup):
             ('3VP', "3-Point", "Three vanishing points (derives principal point and camera shift)"),
         ],
         default='2VP',
+        update=_on_solver_property_update,
     )
 
     # VP1 (X, red) - right side lines converging to the right, off-screen
@@ -110,6 +176,7 @@ class MatchCamProperties(bpy.types.PropertyGroup):
         soft_min=0.01,
         soft_max=1000.0,
         unit='LENGTH',
+        update=_on_ref_distance_update,
     )
     ref_point_a: FloatVectorProperty(
         name="Ref Point A", size=2, default=(0.40, 0.70),
@@ -121,24 +188,45 @@ class MatchCamProperties(bpy.types.PropertyGroup):
     # Principal point (manual override, only used in 2VP mode)
     use_custom_pp: BoolProperty(
         name="Custom Principal Point",
-        description="Override default image-center principal point",
+        description="Override the assumed image-center principal point (optical center of the lens)",
         default=False,
+        update=_on_solver_property_update,
     )
     principal_point: FloatVectorProperty(
         name="Principal Point", size=2, default=(0.5, 0.5),
+        update=_on_solver_property_update,
+    )
+
+    # Background image opacity
+    bg_alpha: FloatProperty(
+        name="Background Opacity",
+        description="Opacity of the camera background image",
+        default=0.87,
+        min=0.0,
+        max=1.0,
+        subtype='FACTOR',
+        update=_on_bg_alpha_update,
+    )
+
+    # Camera selection
+    target_camera: EnumProperty(
+        name="Camera",
+        description="Camera to configure",
+        items=_get_camera_items,
     )
 
 
 # All draggable control point property names
 CONTROL_POINT_NAMES = [
-    "vp1_line1_start", "vp1_line1_end",
-    "vp1_line2_start", "vp1_line2_end",
-    "vp2_line1_start", "vp2_line1_end",
-    "vp2_line2_start", "vp2_line2_end",
-    "vp3_line1_start", "vp3_line1_end",
-    "vp3_line2_start", "vp3_line2_end",
-    "origin_point",
-    "ref_point_a", "ref_point_b",
+    "vp1_line1_start", "vp1_line1_end",       # 0, 1
+    "vp1_line2_start", "vp1_line2_end",        # 2, 3
+    "vp2_line1_start", "vp2_line1_end",        # 4, 5
+    "vp2_line2_start", "vp2_line2_end",        # 6, 7
+    "vp3_line1_start", "vp3_line1_end",        # 8, 9
+    "vp3_line2_start", "vp3_line2_end",        # 10, 11
+    "origin_point",                             # 12
+    "ref_point_a", "ref_point_b",              # 13, 14
+    "principal_point",                          # 15
 ]
 
 # Default values for resetting (3/4 angle, horizon at bottom third)
@@ -158,6 +246,7 @@ CONTROL_POINT_DEFAULTS = {
     "origin_point": (0.50, 0.75),
     "ref_point_a": (0.40, 0.70),
     "ref_point_b": (0.60, 0.70),
+    "principal_point": (0.5, 0.5),
 }
 
 # Names grouped by VP for drawing/interaction filtering
