@@ -243,9 +243,10 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
 
                     setattr(props, name, (nx, ny))
 
-                    # Store loupe state for drawing
+                    # Store loupe state for drawing (centered on handle, not mouse)
+                    handle_sx, handle_sy = normalized_to_screen(nx, ny, frame)
                     scene["_matchcam_precision"] = event.shift
-                    scene["_matchcam_drag_screen"] = (mx, my)
+                    scene["_matchcam_drag_screen"] = (handle_sx, handle_sy)
 
                     # Run solver
                     _run_solver(scene)

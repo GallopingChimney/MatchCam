@@ -185,6 +185,15 @@ def draw_callback(context):
 
     is_3vp = (props.mode == '3VP')
 
+    # --- Read framebuffer for loupe BEFORE drawing any overlay ---
+    loupe_texture = None
+    loupe_pos = None
+    if scene.get("_matchcam_precision", False):
+        drag_screen = scene.get("_matchcam_drag_screen")
+        if drag_screen is not None:
+            loupe_pos = (drag_screen[0], drag_screen[1])
+            loupe_texture = _read_loupe_pixels(loupe_pos[0], loupe_pos[1])
+
     shader = gpu.shader.from_builtin('UNIFORM_COLOR')
     gpu.state.blend_set('ALPHA')
     gpu.state.line_width_set(LINE_WIDTH)
@@ -257,11 +266,9 @@ def draw_callback(context):
     # --- Draw VP indicators ---
     _draw_vp_indicators(shader, props, frame, is_3vp)
 
-    # --- Draw precision loupe ---
-    if scene.get("_matchcam_precision", False):
-        drag_screen = scene.get("_matchcam_drag_screen")
-        if drag_screen is not None:
-            _draw_loupe(shader, drag_screen[0], drag_screen[1])
+    # --- Draw precision loupe (on top of everything, using pre-read pixels) ---
+    if loupe_texture is not None and loupe_pos is not None:
+        _draw_loupe(shader, loupe_pos[0], loupe_pos[1], loupe_texture)
 
     # Restore state
     gpu.state.blend_set('NONE')
@@ -313,11 +320,64 @@ def _draw_filled_circle(shader, cx, cy, radius, color, segments=16):
     batch.draw(shader)
 
 
-def _draw_loupe(shader, cx, cy):
-    """Draw a precision loupe: circle outline with crosshairs and center dot."""
-    segments = 32
+def _read_loupe_pixels(cx, cy):
+    """Read a small region of the framebuffer for the magnified loupe view.
 
-    # Ring outline (line loop as LINES pairs)
+    Returns a gpu.types.GPUTexture or None on failure.
+    """
+    MAGNIFICATION = 4.0
+    sample_size = int(LOUPE_RADIUS * 2 / MAGNIFICATION)
+    half_sample = sample_size // 2
+
+    region = bpy.context.region
+    x0 = int(cx) - half_sample
+    y0 = int(cy) - half_sample
+
+    # Clamp to region bounds
+    x0 = max(0, min(x0, region.width - sample_size))
+    y0 = max(0, min(y0, region.height - sample_size))
+
+    if sample_size < 2:
+        return None
+
+    try:
+        fb = gpu.state.active_framebuffer_get()
+        buf = fb.read_color(x0, y0, sample_size, sample_size, 4, 0, 'FLOAT')
+        buf.dimensions = sample_size * sample_size * 4
+        texture = gpu.types.GPUTexture((sample_size, sample_size), data=buf)
+        return texture
+    except Exception:
+        return None
+
+
+def _draw_loupe(shader, cx, cy, texture):
+    """Draw a precision loupe with magnified framebuffer content."""
+    segments = 32
+    display_half = LOUPE_RADIUS
+
+    # --- Draw magnified texture as a quad ---
+    img_shader = gpu.shader.from_builtin('IMAGE')
+    img_shader.bind()
+    img_shader.uniform_sampler("image", texture)
+
+    batch = batch_for_shader(
+        img_shader, 'TRI_FAN',
+        {
+            "pos": [
+                (cx - display_half, cy - display_half),
+                (cx + display_half, cy - display_half),
+                (cx + display_half, cy + display_half),
+                (cx - display_half, cy + display_half),
+            ],
+            "texCoord": [(0, 0), (1, 0), (1, 1), (0, 1)],
+        },
+    )
+    batch.draw(img_shader)
+
+    # --- Re-bind the uniform color shader for ring + crosshairs ---
+    shader.bind()
+
+    # Ring outline
     gpu.state.line_width_set(1.0)
     ring_verts = _circle_verts(cx, cy, LOUPE_RADIUS, segments)
     line_pairs = []
@@ -332,14 +392,14 @@ def _draw_loupe(shader, cx, cy):
     # Crosshairs
     cs = LOUPE_CROSSHAIR_SIZE
     crosshair_verts = [
-        (cx - cs, cy), (cx + cs, cy),  # horizontal
-        (cx, cy - cs), (cx, cy + cs),  # vertical
+        (cx - cs, cy), (cx + cs, cy),
+        (cx, cy - cs), (cx, cy + cs),
     ]
     shader.uniform_float("color", COL_LOUPE_CROSSHAIR)
     batch = batch_for_shader(shader, 'LINES', {"pos": crosshair_verts})
     batch.draw(shader)
 
-    # Center dot (1px)
+    # Center dot
     _draw_filled_circle(shader, cx, cy, 1.0, COL_LOUPE_CROSSHAIR, segments=8)
 
     gpu.state.line_width_set(LINE_WIDTH)
