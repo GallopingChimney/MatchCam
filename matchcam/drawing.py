@@ -44,8 +44,13 @@ COL_REF_HANDLE_HOVER = (1.0, 1.0, 0.7, 1.0)
 
 COL_VP_INDICATOR = (1.0, 1.0, 1.0, 0.6)    # white
 
+COL_LOUPE_RING = (0.3, 0.9, 0.3, 0.4)     # green, 40% opacity
+COL_LOUPE_CROSSHAIR = (1.0, 1.0, 1.0, 0.9)  # white, 90% opacity
+
 HANDLE_RADIUS = 7.0
 HANDLE_HOVER_RADIUS = 9.0
+LOUPE_RADIUS = 40.0
+LOUPE_CROSSHAIR_SIZE = 4.0
 LINE_WIDTH = 2.0
 
 
@@ -252,6 +257,12 @@ def draw_callback(context):
     # --- Draw VP indicators ---
     _draw_vp_indicators(shader, props, frame, is_3vp)
 
+    # --- Draw precision loupe ---
+    if scene.get("_matchcam_precision", False):
+        drag_screen = scene.get("_matchcam_drag_screen")
+        if drag_screen is not None:
+            _draw_loupe(shader, drag_screen[0], drag_screen[1])
+
     # Restore state
     gpu.state.blend_set('NONE')
     gpu.state.line_width_set(1.0)
@@ -300,6 +311,38 @@ def _draw_filled_circle(shader, cx, cy, radius, color, segments=16):
     shader.uniform_float("color", color)
     batch = batch_for_shader(shader, 'TRIS', {"pos": verts}, indices=indices)
     batch.draw(shader)
+
+
+def _draw_loupe(shader, cx, cy):
+    """Draw a precision loupe: circle outline with crosshairs and center dot."""
+    segments = 32
+
+    # Ring outline (line loop as LINES pairs)
+    gpu.state.line_width_set(1.0)
+    ring_verts = _circle_verts(cx, cy, LOUPE_RADIUS, segments)
+    line_pairs = []
+    for i in range(segments):
+        line_pairs.append(ring_verts[i])
+        line_pairs.append(ring_verts[(i + 1) % segments])
+
+    shader.uniform_float("color", COL_LOUPE_RING)
+    batch = batch_for_shader(shader, 'LINES', {"pos": line_pairs})
+    batch.draw(shader)
+
+    # Crosshairs
+    cs = LOUPE_CROSSHAIR_SIZE
+    crosshair_verts = [
+        (cx - cs, cy), (cx + cs, cy),  # horizontal
+        (cx, cy - cs), (cx, cy + cs),  # vertical
+    ]
+    shader.uniform_float("color", COL_LOUPE_CROSSHAIR)
+    batch = batch_for_shader(shader, 'LINES', {"pos": crosshair_verts})
+    batch.draw(shader)
+
+    # Center dot (1px)
+    _draw_filled_circle(shader, cx, cy, 1.0, COL_LOUPE_CROSSHAIR, segments=8)
+
+    gpu.state.line_width_set(LINE_WIDTH)
 
 
 def _draw_vp_indicators(shader, props, frame, is_3vp):

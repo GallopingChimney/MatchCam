@@ -150,6 +150,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
     _drag_idx: int = -1
     _drag_start_value: tuple[float, float] = (0, 0)
     _drag_start_screen: tuple[float, float] = (0, 0)
+    _last_mouse_screen: tuple[float, float] = (0, 0)
     _hover_idx: int = -1
     _undo_stack: list = []
     _redo_stack: list = []
@@ -214,23 +215,37 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     self._dragging = False
                     self._drag_idx = -1
                 else:
-                    nx, ny = screen_to_normalized(mx, my, frame)
+                    if event.shift:
+                        # Precision mode: 1/4 speed relative to last position
+                        PRECISION_FACTOR = 0.25
+                        last_nx, last_ny = screen_to_normalized(
+                            self._last_mouse_screen[0],
+                            self._last_mouse_screen[1], frame)
+                        full_nx, full_ny = screen_to_normalized(mx, my, frame)
+                        cur = getattr(props, name)
+                        nx = cur[0] + (full_nx - last_nx) * PRECISION_FACTOR
+                        ny = cur[1] + (full_ny - last_ny) * PRECISION_FACTOR
+                    else:
+                        nx, ny = screen_to_normalized(mx, my, frame)
+
                     # Clamp to 0-1
                     nx = max(0.0, min(1.0, nx))
                     ny = max(0.0, min(1.0, ny))
 
-                    # Shift+drag: constrain to horizontal or vertical
-                    if event.shift:
+                    # Ctrl+drag: constrain to horizontal or vertical
+                    if event.ctrl:
                         dx = abs(mx - self._drag_start_screen[0])
                         dy = abs(my - self._drag_start_screen[1])
                         if dx >= dy:
-                            # Constrain to horizontal (keep original Y)
                             ny = self._drag_start_value[1]
                         else:
-                            # Constrain to vertical (keep original X)
                             nx = self._drag_start_value[0]
 
                     setattr(props, name, (nx, ny))
+
+                    # Store loupe state for drawing
+                    scene["_matchcam_precision"] = event.shift
+                    scene["_matchcam_drag_screen"] = (mx, my)
 
                     # Run solver
                     _run_solver(scene)
@@ -238,6 +253,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     # Redraw
                     self._tag_redraw(context)
 
+                self._last_mouse_screen = (mx, my)
                 return {'RUNNING_MODAL'}
             else:
                 # Update hover state
@@ -264,6 +280,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     val = getattr(props, name)
                     self._drag_start_value = (val[0], val[1])
                     self._drag_start_screen = (mx, my)
+                    self._last_mouse_screen = (mx, my)
                     return {'RUNNING_MODAL'}
                 return {'PASS_THROUGH'}
 
@@ -274,6 +291,8 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     self._redo_stack.clear()
                     self._dragging = False
                     self._drag_idx = -1
+                    scene["_matchcam_precision"] = False
+                    self._tag_redraw(context)
                     return {'RUNNING_MODAL'}
                 return {'PASS_THROUGH'}
 
@@ -285,6 +304,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 _run_solver(scene)
                 self._dragging = False
                 self._drag_idx = -1
+                scene["_matchcam_precision"] = False
                 self._tag_redraw(context)
                 return {'RUNNING_MODAL'}
             return {'PASS_THROUGH'}
@@ -297,6 +317,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 _run_solver(scene)
                 self._dragging = False
                 self._drag_idx = -1
+                scene["_matchcam_precision"] = False
                 self._tag_redraw(context)
                 return {'RUNNING_MODAL'}
             return {'PASS_THROUGH'}
@@ -355,6 +376,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
     def _cleanup(self, context):
         unregister_draw_handler()
         context.scene["_matchcam_hover_idx"] = -1
+        context.scene["_matchcam_precision"] = False
         self._tag_redraw(context)
 
     def cancel(self, context):
