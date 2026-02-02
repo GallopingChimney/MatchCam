@@ -47,9 +47,14 @@ class MATCHCAM_PT_main(bpy.types.Panel):
                     warn_row.alert = True
                     warn_row.label(text="Existing background will be replaced!", icon='ERROR')
 
-        # Background opacity
-        box.prop(props, "bg_alpha", slider=True)
-        box.prop(props, "fill_opacity", slider=True)
+        # Image opacity + fill toggle
+        row = box.row(align=True)
+        row.prop(props, "bg_alpha", text="Image Opacity", slider=True)
+        row.prop(props, "show_fill", text="", icon='MESH_PLANE')
+
+        # Front / Back display depth
+        row = box.row(align=True)
+        row.prop(props, "bg_display_depth", expand=True)
 
         row = box.row()
         row.scale_y = 1.905
@@ -57,64 +62,47 @@ class MATCHCAM_PT_main(bpy.types.Panel):
 
         layout.separator()
 
-        # Mode: 2VP / 3VP
+        # Mode + Axis assignment
         box = layout.box()
-        box.label(text="Mode", icon='VIEW_CAMERA')
         row = box.row(align=True)
         row.prop(props, "mode", expand=True)
 
-        if props.mode == '3VP':
-            box.label(text="VP3 lines: blue", icon='INFO')
-            box.label(text="Derives principal point + camera shift")
-
-        layout.separator()
-
-        # Axis assignment
-        box = layout.box()
-        box.label(text="Axis Assignment", icon='ORIENTATION_GLOBAL')
-        row = box.row()
-        row.prop(props, "vp1_axis", text="VP1")
-        row.prop(props, "vp2_axis", text="VP2")
+        row = box.row(align=True)
+        row.label(text="VP1")
+        row.prop(props, "vp1_axis", expand=True)
+        row = box.row(align=True)
+        row.label(text="VP2")
+        row.prop(props, "vp2_axis", expand=True)
 
         # Warn if same axis
         if props.vp1_axis == props.vp2_axis:
             box.label(text="VP axes must differ!", icon='ERROR')
 
-        layout.separator()
-
-        # Principal point (only in 2VP mode - in 3VP it's auto-derived)
+        # Optical centre + Reference distance (same box)
         if props.mode == '2VP':
-            box = layout.box()
             box.prop(props, "use_custom_pp", text="Custom Optical Center")
             if props.use_custom_pp:
-                box.label(text="Lens optical center on image", icon='INFO')
                 row = box.row()
                 row.prop(props, "principal_point", index=0, text="X")
                 row.prop(props, "principal_point", index=1, text="Y")
 
-        # Reference distance
-        box = layout.box()
         box.prop(props, "ref_distance_enabled")
         if props.ref_distance_enabled:
             box.prop(props, "ref_distance")
 
         layout.separator()
 
-        # Camera actions
-        if scene.camera is not None:
-            row = layout.row(align=True)
+        # Action buttons (icon-only, full width)
+        has_cam = scene.camera is not None
+        n_cols = 4 if has_cam else 2
+        grid = layout.grid_flow(row_major=True, columns=n_cols, even_columns=True, align=True)
+        grid.operator("matchcam.reset", text="", icon='FILE_REFRESH')
+        grid.operator("matchcam.reset_origin", text="", icon='OBJECT_ORIGIN')
+        if has_cam:
             is_locked = all(scene.camera.lock_location) and all(scene.camera.lock_rotation)
             lock_icon = 'LOCKED' if is_locked else 'UNLOCKED'
-            lock_text = "Unlock" if is_locked else "Lock"
-            row.operator("matchcam.lock_camera", text=lock_text, icon=lock_icon, depress=is_locked)
-            row.operator("matchcam.keyframe_camera", text="Keyframe", icon='KEYTYPE_KEYFRAME_VEC')
-
-        layout.separator()
-
-        # Reset
-        row = layout.row(align=True)
-        row.operator("matchcam.reset", icon='FILE_REFRESH')
-        row.operator("matchcam.reset_origin", text="", icon='OBJECT_ORIGIN')
+            grid.operator("matchcam.lock_camera", text="", icon=lock_icon, depress=is_locked)
+            grid.operator("matchcam.keyframe_camera", text="", icon='KEYTYPE_KEYFRAME_VEC')
 
         layout.separator()
 
@@ -123,43 +111,44 @@ class MATCHCAM_PT_main(bpy.types.Panel):
         box.label(text="Status", icon='INFO')
 
         is_valid = scene.get('_matchcam_valid', False)
+        col = box.column(align=True)
 
         if not props.enabled:
-            box.label(text="Disabled")
+            col.label(text="Disabled")
         elif scene.camera is None:
-            row = box.row()
+            row = col.row()
             row.alert = True
             row.label(text="No camera - run Setup first", icon='ERROR')
         elif not scene.camera.data.background_images or not any(
                 bg.image for bg in scene.camera.data.background_images):
-            row = box.row()
+            row = col.row()
             row.alert = True
             row.label(text="No background image - run Setup", icon='ERROR')
         elif not is_valid:
-            row = box.row()
+            row = col.row()
             row.alert = True
             row.label(text="Invalid configuration", icon='ERROR')
-            row = box.row()
+            row = col.row()
             row.alert = True
             if props.mode == '3VP':
                 row.label(text="Adjust VP1/VP2/VP3 lines to converge")
             else:
                 row.label(text="Adjust VP1/VP2 lines to converge")
         else:
-            box.label(text=f"Mode: {props.mode}")
+            col.label(text=f"Mode: {props.mode}")
 
             focal = scene.get('_matchcam_focal_mm', 0)
             hfov = scene.get('_matchcam_hfov', 0)
             vfov = scene.get('_matchcam_vfov', 0)
 
-            box.label(text=f"Focal Length: {focal:.1f} mm")
-            box.label(text=f"FOV: {hfov:.1f}\u00b0 x {vfov:.1f}\u00b0")
+            col.label(text=f"Focal Length: {focal:.1f} mm")
+            col.label(text=f"FOV: {hfov:.1f}\u00b0 x {vfov:.1f}\u00b0")
 
             # Show shift values in 3VP mode
             if props.mode == '3VP' and scene.camera is not None:
                 cam = scene.camera.data
                 if abs(cam.shift_x) > 0.001 or abs(cam.shift_y) > 0.001:
-                    box.label(text=f"Shift: {cam.shift_x:.3f} / {cam.shift_y:.3f}")
+                    col.label(text=f"Shift: {cam.shift_x:.3f} / {cam.shift_y:.3f}")
 
 
 # ---------------------------------------------------------------------------

@@ -339,7 +339,7 @@ def draw_callback(context):
         return normalized_to_screen(v[0], v[1], frame)
 
     # --- Draw VP fills (behind lines) ---
-    fill_alpha = props.fill_opacity
+    show_fill = props.show_fill
     vp_drag = scene.get("_matchcam_vp_drag", -1)
 
     # Determine active VP group from drag index or VP diamond drag
@@ -352,10 +352,10 @@ def draw_callback(context):
         active_vp = 2
 
     def _fill_color(base, vp_idx):
-        alpha = fill_alpha + 0.15 if vp_idx == active_vp else fill_alpha
+        alpha = 0.05 + 0.03 if (show_fill and vp_idx == active_vp) else 0.05
         return (base[0], base[1], base[2], min(alpha, 1.0))
 
-    if fill_alpha > 0:
+    if show_fill:
         _draw_vp_fill(
             _pt('vp1_line1_start'), _pt('vp1_line1_end'),
             _pt('vp1_line2_start'), _pt('vp1_line2_end'),

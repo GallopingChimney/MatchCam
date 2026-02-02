@@ -583,32 +583,49 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 return {'RUNNING_MODAL'}
             return {'PASS_THROUGH'}
 
-        # --- Shift press/release: show/dismiss loupe when not dragging ---
+        # --- Shift press/release: show/dismiss loupe ---
         elif event.type in ('LEFT_SHIFT', 'RIGHT_SHIFT'):
-            if not self._dragging and not self._vp_dragging:
-                if event.value == 'PRESS':
-                    # Show loupe on hovered handle immediately
-                    if self._hover_idx >= 0:
-                        val = getattr(props, CONTROL_POINT_NAMES[self._hover_idx])
-                        hsx, hsy = normalized_to_screen(val[0], val[1], frame)
+            if event.value == 'PRESS':
+                if self._dragging and self._drag_idx >= 0:
+                    # Already dragging a handle — show loupe at handle position
+                    name = CONTROL_POINT_NAMES[self._drag_idx]
+                    val = getattr(props, name)
+                    hsx, hsy = normalized_to_screen(val[0], val[1], frame)
+                    scene["_matchcam_precision"] = True
+                    scene["_matchcam_drag_screen"] = (hsx, hsy)
+                    scene["_matchcam_drag_idx"] = self._drag_idx
+                    self._tag_redraw(context)
+                elif self._vp_dragging and self._vp_group >= 0:
+                    # Dragging VP diamond — show loupe at VP position
+                    vp = _get_vp_normalized(props, self._vp_group)
+                    if vp is not None:
+                        vsx, vsy = normalized_to_screen(vp[0], vp[1], frame)
                         scene["_matchcam_precision"] = True
-                        scene["_matchcam_drag_screen"] = (hsx, hsy)
-                        scene["_matchcam_drag_idx"] = self._hover_idx
+                        scene["_matchcam_drag_screen"] = (vsx, vsy)
+                        scene["_matchcam_drag_idx"] = self._vp_group * 4
                         self._tag_redraw(context)
-                    else:
-                        vp_hover = scene.get("_matchcam_vp_hover", -1)
-                        if vp_hover >= 0:
-                            vp = _get_vp_normalized(props, vp_hover)
-                            if vp is not None:
-                                vsx, vsy = normalized_to_screen(vp[0], vp[1], frame)
-                                scene["_matchcam_precision"] = True
-                                scene["_matchcam_drag_screen"] = (vsx, vsy)
-                                scene["_matchcam_drag_idx"] = vp_hover * 4
-                                self._tag_redraw(context)
-                elif event.value == 'RELEASE':
-                    if scene.get("_matchcam_precision", False):
-                        scene["_matchcam_precision"] = False
-                        self._tag_redraw(context)
+                elif self._hover_idx >= 0:
+                    # Hovering a handle — show loupe at handle position
+                    val = getattr(props, CONTROL_POINT_NAMES[self._hover_idx])
+                    hsx, hsy = normalized_to_screen(val[0], val[1], frame)
+                    scene["_matchcam_precision"] = True
+                    scene["_matchcam_drag_screen"] = (hsx, hsy)
+                    scene["_matchcam_drag_idx"] = self._hover_idx
+                    self._tag_redraw(context)
+                else:
+                    vp_hover = scene.get("_matchcam_vp_hover", -1)
+                    if vp_hover >= 0:
+                        vp = _get_vp_normalized(props, vp_hover)
+                        if vp is not None:
+                            vsx, vsy = normalized_to_screen(vp[0], vp[1], frame)
+                            scene["_matchcam_precision"] = True
+                            scene["_matchcam_drag_screen"] = (vsx, vsy)
+                            scene["_matchcam_drag_idx"] = vp_hover * 4
+                            self._tag_redraw(context)
+            elif event.value == 'RELEASE':
+                if scene.get("_matchcam_precision", False):
+                    scene["_matchcam_precision"] = False
+                    self._tag_redraw(context)
             return {'PASS_THROUGH'}
 
         # --- Undo / Redo ---
@@ -788,7 +805,7 @@ class MATCHCAM_OT_setup(bpy.types.Operator):
         bg = cam_data.background_images.new()
         bg.image = img
         bg.alpha = props.bg_alpha
-        bg.display_depth = 'BACK'
+        bg.display_depth = props.bg_display_depth
 
         # Match render resolution to image
         w, h = img.size
@@ -817,7 +834,7 @@ class MATCHCAM_OT_reset(bpy.types.Operator):
     """Reset all control points to default positions"""
     bl_idname = "matchcam.reset"
     bl_label = "Reset Control Points"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {'REGISTER'}
 
     def execute(self, context):
         props = context.scene.matchcam
@@ -828,6 +845,10 @@ class MATCHCAM_OT_reset(bpy.types.Operator):
         if props.enabled:
             _run_solver(context.scene)
 
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+
         return {'FINISHED'}
 
 
@@ -835,7 +856,7 @@ class MATCHCAM_OT_reset_origin(bpy.types.Operator):
     """Reset origin point to default position (image center bottom)"""
     bl_idname = "matchcam.reset_origin"
     bl_label = "Reset Origin Point"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {'REGISTER'}
 
     def execute(self, context):
         props = context.scene.matchcam
@@ -843,6 +864,10 @@ class MATCHCAM_OT_reset_origin(bpy.types.Operator):
 
         if props.enabled:
             _run_solver(context.scene)
+
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
 
         return {'FINISHED'}
 
@@ -855,7 +880,7 @@ class MATCHCAM_OT_lock_camera(bpy.types.Operator):
     """Toggle camera transform locks (location, rotation)"""
     bl_idname = "matchcam.lock_camera"
     bl_label = "Lock Camera"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {'REGISTER'}
 
     def execute(self, context):
         cam = context.scene.camera
@@ -882,7 +907,7 @@ class MATCHCAM_OT_keyframe_camera(bpy.types.Operator):
     """Insert keyframes for camera location, rotation, focal length, and shift"""
     bl_idname = "matchcam.keyframe_camera"
     bl_label = "Keyframe Camera"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {'REGISTER'}
 
     def execute(self, context):
         cam = context.scene.camera

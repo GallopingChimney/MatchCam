@@ -38,6 +38,17 @@ def _on_bg_alpha_update(self, context):
                 area.tag_redraw()
 
 
+def _on_bg_depth_update(self, context):
+    """Update camera background image display depth."""
+    cam = context.scene.camera
+    if cam and cam.data.background_images:
+        for bg in cam.data.background_images:
+            bg.display_depth = self.bg_display_depth
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+
+
 def _on_overlay_update(self, context):
     """Redraw viewport when an overlay setting changes."""
     for area in context.screen.areas:
@@ -206,23 +217,32 @@ class MatchCamProperties(bpy.types.PropertyGroup):
 
     # Background image opacity
     bg_alpha: FloatProperty(
-        name="Background Opacity",
+        name="Image Opacity",
         description="Opacity of the camera background image",
-        default=0.87,
+        default=0.37,
         min=0.0,
         max=1.0,
         subtype='FACTOR',
         update=_on_bg_alpha_update,
     )
 
-    # VP fill opacity
-    fill_opacity: FloatProperty(
-        name="Fill Opacity",
-        description="Opacity of the VP area fill between line pairs",
-        default=0.10,
-        min=0.0,
-        max=1.0,
-        subtype='FACTOR',
+    # Background image display depth
+    bg_display_depth: EnumProperty(
+        name="Image Depth",
+        description="Display background image in front of or behind the 3D scene",
+        items=[
+            ('BACK', "Back", "Behind the 3D scene"),
+            ('FRONT', "Front", "In front of the 3D scene"),
+        ],
+        default='BACK',
+        update=_on_bg_depth_update,
+    )
+
+    # VP area fill toggle
+    show_fill: BoolProperty(
+        name="VP Fill",
+        description="Show filled area between VP line pairs",
+        default=True,
         update=_on_overlay_update,
     )
 
