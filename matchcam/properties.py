@@ -38,6 +38,13 @@ def _on_bg_alpha_update(self, context):
                 area.tag_redraw()
 
 
+def _on_overlay_update(self, context):
+    """Redraw viewport when an overlay setting changes."""
+    for area in context.screen.areas:
+        if area.type == 'VIEW_3D':
+            area.tag_redraw()
+
+
 _camera_items_ref = []
 
 
@@ -206,6 +213,17 @@ class MatchCamProperties(bpy.types.PropertyGroup):
         max=1.0,
         subtype='FACTOR',
         update=_on_bg_alpha_update,
+    )
+
+    # VP fill opacity
+    fill_opacity: FloatProperty(
+        name="Fill Opacity",
+        description="Opacity of the VP area fill between line pairs",
+        default=0.10,
+        min=0.0,
+        max=1.0,
+        subtype='FACTOR',
+        update=_on_overlay_update,
     )
 
     # Camera selection

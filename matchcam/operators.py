@@ -583,12 +583,32 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 return {'RUNNING_MODAL'}
             return {'PASS_THROUGH'}
 
-        # --- Shift release: dismiss loupe when not dragging ---
-        elif event.type in ('LEFT_SHIFT', 'RIGHT_SHIFT') and event.value == 'RELEASE':
+        # --- Shift press/release: show/dismiss loupe when not dragging ---
+        elif event.type in ('LEFT_SHIFT', 'RIGHT_SHIFT'):
             if not self._dragging and not self._vp_dragging:
-                if scene.get("_matchcam_precision", False):
-                    scene["_matchcam_precision"] = False
-                    self._tag_redraw(context)
+                if event.value == 'PRESS':
+                    # Show loupe on hovered handle immediately
+                    if self._hover_idx >= 0:
+                        val = getattr(props, CONTROL_POINT_NAMES[self._hover_idx])
+                        hsx, hsy = normalized_to_screen(val[0], val[1], frame)
+                        scene["_matchcam_precision"] = True
+                        scene["_matchcam_drag_screen"] = (hsx, hsy)
+                        scene["_matchcam_drag_idx"] = self._hover_idx
+                        self._tag_redraw(context)
+                    else:
+                        vp_hover = scene.get("_matchcam_vp_hover", -1)
+                        if vp_hover >= 0:
+                            vp = _get_vp_normalized(props, vp_hover)
+                            if vp is not None:
+                                vsx, vsy = normalized_to_screen(vp[0], vp[1], frame)
+                                scene["_matchcam_precision"] = True
+                                scene["_matchcam_drag_screen"] = (vsx, vsy)
+                                scene["_matchcam_drag_idx"] = vp_hover * 4
+                                self._tag_redraw(context)
+                elif event.value == 'RELEASE':
+                    if scene.get("_matchcam_precision", False):
+                        scene["_matchcam_precision"] = False
+                        self._tag_redraw(context)
             return {'PASS_THROUGH'}
 
         # --- Undo / Redo ---

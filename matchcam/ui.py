@@ -49,6 +49,7 @@ class MATCHCAM_PT_main(bpy.types.Panel):
 
         # Background opacity
         box.prop(props, "bg_alpha", slider=True)
+        box.prop(props, "fill_opacity", slider=True)
 
         row = box.row()
         row.scale_y = 1.905

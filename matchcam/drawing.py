@@ -47,6 +47,10 @@ COL_PP = (1.0, 1.0, 1.0, 0.9)           # white for principal point
 COL_PP_HOVER = (1.0, 1.0, 1.0, 1.0)
 COL_PP_CROSSHAIR = (1.0, 1.0, 1.0, 0.5)
 
+COL_VP1_FILL = (0.95, 0.2, 0.2, 0.20)
+COL_VP2_FILL = (0.2, 0.85, 0.2, 0.20)
+COL_VP3_FILL = (0.2, 0.5, 0.95, 0.20)
+
 HANDLE_RADIUS = 7.0
 HANDLE_HOVER_RADIUS = 9.0
 LOUPE_RADIUS = 48.0
@@ -334,6 +338,41 @@ def draw_callback(context):
         v = getattr(props, name)
         return normalized_to_screen(v[0], v[1], frame)
 
+    # --- Draw VP fills (behind lines) ---
+    fill_alpha = props.fill_opacity
+    vp_drag = scene.get("_matchcam_vp_drag", -1)
+
+    # Determine active VP group from drag index or VP diamond drag
+    active_vp = -1
+    if 0 <= drag_idx <= 3 or vp_drag == 0:
+        active_vp = 0
+    elif 4 <= drag_idx <= 7 or vp_drag == 1:
+        active_vp = 1
+    elif 8 <= drag_idx <= 11 or vp_drag == 2:
+        active_vp = 2
+
+    def _fill_color(base, vp_idx):
+        alpha = fill_alpha + 0.15 if vp_idx == active_vp else fill_alpha
+        return (base[0], base[1], base[2], min(alpha, 1.0))
+
+    if fill_alpha > 0:
+        _draw_vp_fill(
+            _pt('vp1_line1_start'), _pt('vp1_line1_end'),
+            _pt('vp1_line2_start'), _pt('vp1_line2_end'),
+            _fill_color(COL_VP1_FILL, 0),
+        )
+        _draw_vp_fill(
+            _pt('vp2_line1_start'), _pt('vp2_line1_end'),
+            _pt('vp2_line2_start'), _pt('vp2_line2_end'),
+            _fill_color(COL_VP2_FILL, 1),
+        )
+        if is_3vp:
+            _draw_vp_fill(
+                _pt('vp3_line1_start'), _pt('vp3_line1_end'),
+                _pt('vp3_line2_start'), _pt('vp3_line2_end'),
+                _fill_color(COL_VP3_FILL, 2),
+            )
+
     # --- Draw VP1 lines ---
     _draw_aa_line_pair(
         _pt('vp1_line1_start'), _pt('vp1_line1_end'),
@@ -420,6 +459,65 @@ def draw_callback(context):
             _draw_loupe(drag_screen[0], drag_screen[1], frame, drag_idx)
 
     gpu.state.blend_set('NONE')
+
+
+def _line_intersect_2d(s1, e1, s2, e2):
+    """Intersect two infinite 2D lines. Returns (x, y) or None if parallel."""
+    d1x, d1y = e1[0] - s1[0], e1[1] - s1[1]
+    d2x, d2y = e2[0] - s2[0], e2[1] - s2[1]
+    denom = d1x * d2y - d1y * d2x
+    if abs(denom) < 1e-10:
+        return None
+    t = ((s2[0] - s1[0]) * d2y - (s2[1] - s1[1]) * d2x) / denom
+    return (s1[0] + t * d1x, s1[1] + t * d1y)
+
+
+def _draw_vp_fill(s1, e1, s2, e2, fill_color, ext_factor=0.75):
+    """Draw a triangular filled area between two VP line segments.
+
+    The triangle runs from the VP intersection (apex) to the farthest
+    endpoints of each line (base).  Extension beyond the base fades
+    from *fill_color* to transparent.
+    """
+    vp = _line_intersect_2d(s1, e1, s2, e2)
+    if vp is None:
+        return
+
+    # Pick the farthest endpoint from the VP for each line
+    d_s1 = (s1[0] - vp[0]) ** 2 + (s1[1] - vp[1]) ** 2
+    d_e1 = (e1[0] - vp[0]) ** 2 + (e1[1] - vp[1]) ** 2
+    far1 = s1 if d_s1 >= d_e1 else e1
+
+    d_s2 = (s2[0] - vp[0]) ** 2 + (s2[1] - vp[1]) ** 2
+    d_e2 = (e2[0] - vp[0]) ** 2 + (e2[1] - vp[1]) ** 2
+    far2 = s2 if d_s2 >= d_e2 else e2
+
+    fc = tuple(fill_color)
+    ft = (fc[0], fc[1], fc[2], 0.0)
+
+    # Extension tips beyond the far endpoints (away from VP)
+    def _extend(origin, tip, factor):
+        return (tip[0] + (tip[0] - origin[0]) * factor,
+                tip[1] + (tip[1] - origin[1]) * factor)
+
+    ext1 = _extend(vp, far1, ext_factor)
+    ext2 = _extend(vp, far2, ext_factor)
+
+    # Vertices:  VP(0)  far1(1)  far2(2)  ext1(3)  ext2(4)
+    verts = [vp, far1, far2, ext1, ext2]
+    colors = [fc, fc, fc, ft, ft]
+    indices = [
+        # Core triangle
+        (0, 1, 2),
+        # Extension quad (two tris) from base to faded tips
+        (1, 3, 4), (1, 4, 2),
+    ]
+
+    shader = gpu.shader.from_builtin('SMOOTH_COLOR')
+    shader.bind()
+    batch = batch_for_shader(shader, 'TRIS',
+        {"pos": verts, "color": colors}, indices=indices)
+    batch.draw(shader)
 
 
 def _draw_aa_line_pair(s1, e1, s2, e2, color, ext_color):
