@@ -1,0 +1,5 @@
+distance slider needs to update realtime
+
+should have exposed slider for background image opacity, default to 87%
+
+camera smart selection. if at least one camera exists, provide option to choose which camera to configure, or create new camera. anticipate users forced errors such as a camera already having a background image, provide user with option to cancel or replace.

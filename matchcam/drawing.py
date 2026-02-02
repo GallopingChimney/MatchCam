@@ -2,7 +2,8 @@
 GPU overlay drawing for MatchCam.
 
 Draws vanishing point lines, control point handles, origin marker,
-and status information over the camera view.
+and status information over the camera view.  All primitives use
+anti-aliased rendering via the SMOOTH_COLOR shader with feathered edges.
 """
 
 from __future__ import annotations
@@ -35,44 +36,183 @@ COL_VP3_LINE_EXT = (0.2, 0.5, 0.95, 0.3)
 COL_VP3_HANDLE = (0.3, 0.6, 1.0, 1.0)
 COL_VP3_HANDLE_HOVER = (0.5, 0.8, 1.0, 1.0)
 
-COL_ORIGIN = (1.0, 0.8, 0.0, 1.0)          # yellow/orange (distinct from VP2 green)
+COL_ORIGIN = (1.0, 0.8, 0.0, 1.0)
 COL_ORIGIN_HOVER = (1.0, 0.9, 0.4, 1.0)
 
-COL_REF_LINE = (0.9, 0.9, 0.2, 0.8)        # yellow
+COL_REF_LINE = (0.9, 0.9, 0.2, 0.8)
 COL_REF_HANDLE = (1.0, 1.0, 0.3, 1.0)
 COL_REF_HANDLE_HOVER = (1.0, 1.0, 0.7, 1.0)
 
-COL_VP_INDICATOR = (1.0, 1.0, 1.0, 0.6)    # white
-
-COL_LOUPE_RING = (0.3, 0.9, 0.3, 0.4)     # green, 40% opacity
-COL_LOUPE_CROSSHAIR = (1.0, 1.0, 1.0, 0.9)  # white, 90% opacity
-
 HANDLE_RADIUS = 7.0
 HANDLE_HOVER_RADIUS = 9.0
-LOUPE_RADIUS = 40.0
+LOUPE_RADIUS = 48.0
 LOUPE_CROSSHAIR_SIZE = 4.0
+LOUPE_BORDER_WIDTH = 2.0
+LOUPE_MAGNIFICATION = 4.0
+LOUPE_SEGMENTS = 64
 LINE_WIDTH = 2.0
+AA_FRINGE = 1.0  # anti-aliasing feather width in pixels
 
 
 # ---------------------------------------------------------------------------
-# Geometry helpers
+# Anti-aliased drawing primitives
 # ---------------------------------------------------------------------------
 
-def _circle_verts(cx: float, cy: float, radius: float, segments: int = 16) -> list[tuple[float, float]]:
-    """Generate vertices for a filled circle as a triangle fan center list."""
-    verts = []
+def _draw_aa_line(p1, p2, color, width=LINE_WIDTH):
+    """Draw an anti-aliased line as a quad with feathered edges."""
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    length = math.sqrt(dx * dx + dy * dy)
+    if length < 0.001:
+        return
+
+    nx = -dy / length
+    ny = dx / length
+
+    hw = width / 2.0
+    aa = AA_FRINGE
+
+    inner_color = tuple(color)
+    outer_color = (color[0], color[1], color[2], 0.0)
+
+    verts = [
+        (p1[0] + nx * (hw + aa), p1[1] + ny * (hw + aa)),
+        (p1[0] + nx * hw, p1[1] + ny * hw),
+        (p1[0] - nx * hw, p1[1] - ny * hw),
+        (p1[0] - nx * (hw + aa), p1[1] - ny * (hw + aa)),
+        (p2[0] + nx * (hw + aa), p2[1] + ny * (hw + aa)),
+        (p2[0] + nx * hw, p2[1] + ny * hw),
+        (p2[0] - nx * hw, p2[1] - ny * hw),
+        (p2[0] - nx * (hw + aa), p2[1] - ny * (hw + aa)),
+    ]
+
+    colors = [
+        outer_color, inner_color, inner_color, outer_color,
+        outer_color, inner_color, inner_color, outer_color,
+    ]
+
+    indices = [
+        (0, 1, 5), (0, 5, 4),
+        (1, 2, 6), (1, 6, 5),
+        (2, 3, 7), (2, 7, 6),
+    ]
+
+    shader = gpu.shader.from_builtin('SMOOTH_COLOR')
+    shader.bind()
+    batch = batch_for_shader(shader, 'TRIS',
+        {"pos": verts, "color": colors}, indices=indices)
+    batch.draw(shader)
+
+
+def _draw_aa_circle(cx, cy, radius, color, segments=32):
+    """Draw an anti-aliased filled circle with feathered edge."""
+    aa = AA_FRINGE
+    inner_color = tuple(color)
+    outer_color = (color[0], color[1], color[2], 0.0)
+
+    verts = [(cx, cy)]
+    colors_list = [inner_color]
+
     for i in range(segments):
         angle = 2.0 * math.pi * i / segments
-        verts.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
-    return verts
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+        verts.append((cx + radius * cos_a, cy + radius * sin_a))
+        colors_list.append(inner_color)
+        verts.append((cx + (radius + aa) * cos_a, cy + (radius + aa) * sin_a))
+        colors_list.append(outer_color)
 
-
-def _circle_tris(segments: int = 16) -> list[tuple[int, int, int]]:
-    """Triangle indices for a fan with center at index 0."""
-    tris = []
+    indices = []
     for i in range(segments):
-        tris.append((0, i + 1, (i + 1) % segments + 1))
-    return tris
+        ni = (i + 1) % segments
+        inner_i = 1 + i * 2
+        inner_ni = 1 + ni * 2
+        outer_i = 2 + i * 2
+        outer_ni = 2 + ni * 2
+        indices.append((0, inner_i, inner_ni))
+        indices.append((inner_i, outer_i, outer_ni))
+        indices.append((inner_i, outer_ni, inner_ni))
+
+    shader = gpu.shader.from_builtin('SMOOTH_COLOR')
+    shader.bind()
+    batch = batch_for_shader(shader, 'TRIS',
+        {"pos": verts, "color": colors_list}, indices=indices)
+    batch.draw(shader)
+
+
+def _draw_aa_annulus(cx, cy, inner_r, outer_r, color, segments=64):
+    """Draw an anti-aliased ring (annulus) with feathered edges."""
+    aa = AA_FRINGE
+    inner_color = tuple(color)
+    outer_color = (color[0], color[1], color[2], 0.0)
+
+    verts = []
+    colors_list = []
+
+    for i in range(segments):
+        angle = 2.0 * math.pi * i / segments
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+
+        verts.append((cx + max(0, inner_r - aa) * cos_a, cy + max(0, inner_r - aa) * sin_a))
+        colors_list.append(outer_color)
+        verts.append((cx + inner_r * cos_a, cy + inner_r * sin_a))
+        colors_list.append(inner_color)
+        verts.append((cx + outer_r * cos_a, cy + outer_r * sin_a))
+        colors_list.append(inner_color)
+        verts.append((cx + (outer_r + aa) * cos_a, cy + (outer_r + aa) * sin_a))
+        colors_list.append(outer_color)
+
+    indices = []
+    for i in range(segments):
+        ni = (i + 1) % segments
+        base_i = i * 4
+        base_ni = ni * 4
+        indices.append((base_i, base_i + 1, base_ni + 1))
+        indices.append((base_i, base_ni + 1, base_ni))
+        indices.append((base_i + 1, base_i + 2, base_ni + 2))
+        indices.append((base_i + 1, base_ni + 2, base_ni + 1))
+        indices.append((base_i + 2, base_i + 3, base_ni + 3))
+        indices.append((base_i + 2, base_ni + 3, base_ni + 2))
+
+    shader = gpu.shader.from_builtin('SMOOTH_COLOR')
+    shader.bind()
+    batch = batch_for_shader(shader, 'TRIS',
+        {"pos": verts, "color": colors_list}, indices=indices)
+    batch.draw(shader)
+
+
+def _draw_aa_diamond(cx, cy, size, color):
+    """Draw an anti-aliased diamond shape."""
+    aa = AA_FRINGE
+    inner_color = tuple(color)
+    outer_color = (color[0], color[1], color[2], 0.0)
+
+    # Inner diamond + outer AA diamond
+    verts = [
+        (cx, cy),
+        (cx, cy + size), (cx + size, cy), (cx, cy - size), (cx - size, cy),
+        (cx, cy + size + aa), (cx + size + aa, cy),
+        (cx, cy - size - aa), (cx - size - aa, cy),
+    ]
+    colors_list = [
+        inner_color,
+        inner_color, inner_color, inner_color, inner_color,
+        outer_color, outer_color, outer_color, outer_color,
+    ]
+    indices = [
+        (0, 1, 2), (0, 2, 3), (0, 3, 4), (0, 4, 1),
+        (1, 5, 6), (1, 6, 2),
+        (2, 6, 7), (2, 7, 3),
+        (3, 7, 8), (3, 8, 4),
+        (4, 8, 5), (4, 5, 1),
+    ]
+
+    shader = gpu.shader.from_builtin('SMOOTH_COLOR')
+    shader.bind()
+    batch = batch_for_shader(shader, 'TRIS',
+        {"pos": verts, "color": colors_list}, indices=indices)
+    batch.draw(shader)
 
 
 # ---------------------------------------------------------------------------
@@ -99,18 +239,12 @@ def get_camera_frame_px(context) -> tuple[float, float, float, float] | None:
 
 
 def _view3d_camera_border(scene, region, rv3d):
-    """Compute camera border rectangle in region pixel coords.
-
-    Returns (x, y, width, height) or None.
-    """
+    """Compute camera border rectangle in region pixel coords."""
     cam = scene.camera
     if cam is None:
         return None
 
-    frame_px = _compute_camera_border_from_projection(
-        scene, region, rv3d, cam
-    )
-    return frame_px
+    return _compute_camera_border_from_projection(scene, region, rv3d, cam)
 
 
 def _compute_camera_border_from_projection(scene, region, rv3d, camera):
@@ -180,40 +314,24 @@ def draw_callback(context):
     if frame is None:
         return
 
-    # Get hover state from the running modal operator
     hover_idx = scene.get("_matchcam_hover_idx", -1)
-
     is_3vp = (props.mode == '3VP')
 
-    # --- Read framebuffer for loupe BEFORE drawing any overlay ---
-    loupe_texture = None
-    loupe_pos = None
-    if scene.get("_matchcam_precision", False):
-        drag_screen = scene.get("_matchcam_drag_screen")
-        if drag_screen is not None:
-            loupe_pos = (drag_screen[0], drag_screen[1])
-            loupe_texture = _read_loupe_pixels(loupe_pos[0], loupe_pos[1])
-
-    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
     gpu.state.blend_set('ALPHA')
-    gpu.state.line_width_set(LINE_WIDTH)
 
-    # Collect control point screen positions for handle drawing
     def _pt(name):
         v = getattr(props, name)
         return normalized_to_screen(v[0], v[1], frame)
 
     # --- Draw VP1 lines ---
-    _draw_line_pair(
-        shader,
+    _draw_aa_line_pair(
         _pt('vp1_line1_start'), _pt('vp1_line1_end'),
         _pt('vp1_line2_start'), _pt('vp1_line2_end'),
         COL_VP1_LINE, COL_VP1_LINE_EXT,
     )
 
     # --- Draw VP2 lines ---
-    _draw_line_pair(
-        shader,
+    _draw_aa_line_pair(
         _pt('vp2_line1_start'), _pt('vp2_line1_end'),
         _pt('vp2_line2_start'), _pt('vp2_line2_end'),
         COL_VP2_LINE, COL_VP2_LINE_EXT,
@@ -221,8 +339,7 @@ def draw_callback(context):
 
     # --- Draw VP3 lines (3VP mode only) ---
     if is_3vp:
-        _draw_line_pair(
-            shader,
+        _draw_aa_line_pair(
             _pt('vp3_line1_start'), _pt('vp3_line1_end'),
             _pt('vp3_line2_start'), _pt('vp3_line2_end'),
             COL_VP3_LINE, COL_VP3_LINE_EXT,
@@ -230,7 +347,7 @@ def draw_callback(context):
 
     # --- Draw reference distance line ---
     if props.ref_distance_enabled:
-        _draw_line(shader, _pt('ref_point_a'), _pt('ref_point_b'), COL_REF_LINE)
+        _draw_aa_line(_pt('ref_point_a'), _pt('ref_point_b'), COL_REF_LINE)
 
     # --- Draw handles ---
     vp1_names = ['vp1_line1_start', 'vp1_line1_end', 'vp1_line2_start', 'vp1_line2_end']
@@ -240,7 +357,6 @@ def draw_callback(context):
     from .properties import CONTROL_POINT_NAMES
 
     for i, name in enumerate(CONTROL_POINT_NAMES):
-        # Skip VP3 handles in 2VP mode
         if name in vp3_names and not is_3vp:
             continue
         if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
@@ -261,151 +377,151 @@ def draw_callback(context):
             col = COL_REF_HANDLE_HOVER if is_hover else COL_REF_HANDLE
 
         radius = HANDLE_HOVER_RADIUS if is_hover else HANDLE_RADIUS
-        _draw_filled_circle(shader, pos[0], pos[1], radius, col)
+        _draw_aa_circle(pos[0], pos[1], radius, col)
 
     # --- Draw VP indicators ---
-    _draw_vp_indicators(shader, props, frame, is_3vp)
+    _draw_vp_indicators(props, frame, is_3vp)
 
-    # --- Draw precision loupe (on top of everything, using pre-read pixels) ---
-    if loupe_texture is not None and loupe_pos is not None:
-        _draw_loupe(shader, loupe_pos[0], loupe_pos[1], loupe_texture)
+    # --- Draw precision loupe (on top of everything) ---
+    if scene.get("_matchcam_precision", False):
+        drag_screen = scene.get("_matchcam_drag_screen")
+        drag_idx = scene.get("_matchcam_drag_idx", -1)
+        if drag_screen is not None:
+            _draw_loupe(drag_screen[0], drag_screen[1], frame, drag_idx)
 
-    # Restore state
     gpu.state.blend_set('NONE')
-    gpu.state.line_width_set(1.0)
 
 
-def _draw_line(shader, p1, p2, color):
-    """Draw a single line segment."""
-    shader.uniform_float("color", color)
-    batch = batch_for_shader(shader, 'LINES', {"pos": [p1, p2]})
-    batch.draw(shader)
+def _draw_aa_line_pair(s1, e1, s2, e2, color, ext_color):
+    """Draw two line segments with AA extensions showing convergence."""
+    _draw_aa_line(s1, e1, color)
+    _draw_aa_line(s2, e2, color)
 
-
-def _draw_line_pair(shader, s1, e1, s2, e2, color, ext_color):
-    """Draw two line segments with extensions showing convergence."""
-    # Main lines
-    shader.uniform_float("color", color)
-    batch = batch_for_shader(shader, 'LINES', {"pos": [s1, e1, s2, e2]})
-    batch.draw(shader)
-
-    # Extensions beyond endpoints
     def _extend(a, b, factor=1.5):
         dx = b[0] - a[0]
         dy = b[1] - a[1]
         return (b[0] + dx * factor, b[1] + dy * factor)
 
-    ext1_far = _extend(s1, e1)
-    ext1_near = _extend(e1, s1)
-    ext2_far = _extend(s2, e2)
-    ext2_near = _extend(e2, s2)
-
-    shader.uniform_float("color", ext_color)
-    batch = batch_for_shader(
-        shader, 'LINES',
-        {"pos": [e1, ext1_far, s1, ext1_near, e2, ext2_far, s2, ext2_near]},
-    )
-    batch.draw(shader)
+    _draw_aa_line(e1, _extend(s1, e1), ext_color)
+    _draw_aa_line(s1, _extend(e1, s1), ext_color)
+    _draw_aa_line(e2, _extend(s2, e2), ext_color)
+    _draw_aa_line(s2, _extend(e2, s2), ext_color)
 
 
-def _draw_filled_circle(shader, cx, cy, radius, color, segments=16):
-    """Draw a filled circle at screen position."""
-    verts = [(cx, cy)]  # center
-    verts.extend(_circle_verts(cx, cy, radius, segments))
+# ---------------------------------------------------------------------------
+# Loupe
+# ---------------------------------------------------------------------------
 
-    indices = _circle_tris(segments)
+def _get_loupe_color(drag_idx):
+    """Get the VP axis color for the dragged handle index."""
+    if 0 <= drag_idx <= 3:
+        return COL_VP1_LINE[:3]   # red
+    elif 4 <= drag_idx <= 7:
+        return COL_VP2_LINE[:3]   # green
+    elif 8 <= drag_idx <= 11:
+        return COL_VP3_LINE[:3]   # blue
+    elif drag_idx == 12:
+        return COL_ORIGIN[:3]     # yellow
+    else:
+        return COL_REF_LINE[:3]   # yellow
 
-    shader.uniform_float("color", color)
-    batch = batch_for_shader(shader, 'TRIS', {"pos": verts}, indices=indices)
-    batch.draw(shader)
 
+def _draw_loupe(cx, cy, frame, drag_idx):
+    """Draw a precision loupe sampling directly from the background image.
 
-def _read_loupe_pixels(cx, cy):
-    """Read a small region of the framebuffer for the magnified loupe view.
-
-    Returns a gpu.types.GPUTexture or None on failure.
+    The magnified view is clipped to a circular shape, with an axis-colored
+    border ring and crosshairs.
     """
-    MAGNIFICATION = 4.0
-    sample_size = int(LOUPE_RADIUS * 2 / MAGNIFICATION)
-    half_sample = sample_size // 2
+    cam = bpy.context.scene.camera
+    if cam is None:
+        return
+    bg_images = cam.data.background_images
+    if not bg_images or bg_images[0].image is None:
+        return
 
-    region = bpy.context.region
-    x0 = int(cx) - half_sample
-    y0 = int(cy) - half_sample
+    img = bg_images[0].image
+    img_w, img_h = img.size
+    if img_w == 0 or img_h == 0:
+        return
 
-    # Clamp to region bounds
-    x0 = max(0, min(x0, region.width - sample_size))
-    y0 = max(0, min(y0, region.height - sample_size))
-
-    if sample_size < 2:
-        return None
-
+    # Get GPU texture from Blender image (efficient, no pixel copy)
     try:
-        fb = gpu.state.active_framebuffer_get()
-        buf = fb.read_color(x0, y0, sample_size, sample_size, 4, 0, 'FLOAT')
-        buf.dimensions = sample_size * sample_size * 4
-        texture = gpu.types.GPUTexture((sample_size, sample_size), data=buf)
-        return texture
+        texture = gpu.texture.from_image(img)
     except Exception:
-        return None
+        return
+    if texture is None:
+        return
 
+    # --- Compute UV region for magnification ---
+    nx, ny = screen_to_normalized(cx, cy, frame)
+    # Image UV space: (0,0) = bottom-left, (1,1) = top-right
+    # Our normalized: ny=0 is top, ny=1 is bottom
+    uv_cx = nx
+    uv_cy = 1.0 - ny
 
-def _draw_loupe(shader, cx, cy, texture):
-    """Draw a precision loupe with magnified framebuffer content."""
-    segments = 32
-    display_half = LOUPE_RADIUS
+    fx, fy, fw, fh = frame
+    if fw < 1 or fh < 1:
+        return
 
-    # --- Draw magnified texture as a quad ---
+    uv_half_x = (LOUPE_RADIUS / LOUPE_MAGNIFICATION) / fw
+    uv_half_y = (LOUPE_RADIUS / LOUPE_MAGNIFICATION) / fh
+
+    # --- Draw textured circle (circular clip) ---
+    segments = LOUPE_SEGMENTS
+    positions = [(cx, cy)]
+    uvs = [(uv_cx, uv_cy)]
+
+    for i in range(segments):
+        angle = 2.0 * math.pi * i / segments
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+        positions.append((cx + LOUPE_RADIUS * cos_a, cy + LOUPE_RADIUS * sin_a))
+        uvs.append((uv_cx + uv_half_x * cos_a, uv_cy + uv_half_y * sin_a))
+
+    indices = []
+    for i in range(segments):
+        ni = (i + 1) % segments
+        indices.append((0, i + 1, ni + 1))
+
     img_shader = gpu.shader.from_builtin('IMAGE')
     img_shader.bind()
     img_shader.uniform_sampler("image", texture)
 
     batch = batch_for_shader(
-        img_shader, 'TRI_FAN',
-        {
-            "pos": [
-                (cx - display_half, cy - display_half),
-                (cx + display_half, cy - display_half),
-                (cx + display_half, cy + display_half),
-                (cx - display_half, cy + display_half),
-            ],
-            "texCoord": [(0, 0), (1, 0), (1, 1), (0, 1)],
-        },
+        img_shader, 'TRIS',
+        {"pos": positions, "texCoord": uvs},
+        indices=indices,
     )
     batch.draw(img_shader)
 
-    # --- Re-bind the uniform color shader for ring + crosshairs ---
-    shader.bind()
+    # --- Border ring (2px, axis-colored, AA) ---
+    loupe_rgb = _get_loupe_color(drag_idx)
+    border_color = (*loupe_rgb, 0.8)
+    crosshair_color = (*loupe_rgb, 0.9)
 
-    # Ring outline
-    gpu.state.line_width_set(1.0)
-    ring_verts = _circle_verts(cx, cy, LOUPE_RADIUS, segments)
-    line_pairs = []
-    for i in range(segments):
-        line_pairs.append(ring_verts[i])
-        line_pairs.append(ring_verts[(i + 1) % segments])
+    inner_r = LOUPE_RADIUS - LOUPE_BORDER_WIDTH / 2
+    outer_r = LOUPE_RADIUS + LOUPE_BORDER_WIDTH / 2
+    _draw_aa_annulus(cx, cy, inner_r, outer_r, border_color, segments)
 
-    shader.uniform_float("color", COL_LOUPE_RING)
-    batch = batch_for_shader(shader, 'LINES', {"pos": line_pairs})
-    batch.draw(shader)
-
-    # Crosshairs
+    # --- Crosshairs (pixel-aligned for symmetry) ---
+    rcx = round(cx * 2) / 2
+    rcy = round(cy * 2) / 2
     cs = LOUPE_CROSSHAIR_SIZE
-    crosshair_verts = [
-        (cx - cs, cy), (cx + cs, cy),
-        (cx, cy - cs), (cx, cy + cs),
-    ]
-    shader.uniform_float("color", COL_LOUPE_CROSSHAIR)
-    batch = batch_for_shader(shader, 'LINES', {"pos": crosshair_verts})
-    batch.draw(shader)
+
+    # Horizontal crosshair
+    _draw_aa_line((rcx - cs, rcy), (rcx + cs, rcy), crosshair_color, width=1.0)
+    # Vertical crosshair
+    _draw_aa_line((rcx, rcy - cs), (rcx, rcy + cs), crosshair_color, width=1.0)
 
     # Center dot
-    _draw_filled_circle(shader, cx, cy, 1.0, COL_LOUPE_CROSSHAIR, segments=8)
-
-    gpu.state.line_width_set(LINE_WIDTH)
+    _draw_aa_circle(rcx, rcy, 1.0, crosshair_color, segments=12)
 
 
-def _draw_vp_indicators(shader, props, frame, is_3vp):
+# ---------------------------------------------------------------------------
+# VP indicators
+# ---------------------------------------------------------------------------
+
+def _draw_vp_indicators(props, frame, is_3vp):
     """Draw small diamonds at the computed vanishing point positions."""
     cam = bpy.context.scene.camera
     if cam is None:
@@ -425,7 +541,6 @@ def _draw_vp_indicators(shader, props, frame, is_3vp):
 
     aspect = w / h
 
-    # Compute VPs
     def _vp_from_lines(s1_name, e1_name, s2_name, e2_name):
         s1 = getattr(props, s1_name)
         e1 = getattr(props, e1_name)
@@ -443,8 +558,8 @@ def _draw_vp_indicators(shader, props, frame, is_3vp):
     vp_list = [(fu, COL_VP1_LINE), (fv, COL_VP2_LINE)]
 
     if is_3vp:
-        fw = _vp_from_lines('vp3_line1_start', 'vp3_line1_end', 'vp3_line2_start', 'vp3_line2_end')
-        vp_list.append((fw, COL_VP3_LINE))
+        fw_vp = _vp_from_lines('vp3_line1_start', 'vp3_line1_end', 'vp3_line2_start', 'vp3_line2_end')
+        vp_list.append((fw_vp, COL_VP3_LINE))
 
     for vp, col in vp_list:
         if vp is None:
@@ -455,17 +570,7 @@ def _draw_vp_indicators(shader, props, frame, is_3vp):
 
         region = bpy.context.region
         if -500 < sx < region.width + 500 and -500 < sy < region.height + 500:
-            sz = 6.0
-            verts = [
-                (sx, sy + sz),
-                (sx + sz, sy),
-                (sx, sy - sz),
-                (sx - sz, sy),
-            ]
-            indices = [(0, 1, 2), (0, 2, 3)]
-            shader.uniform_float("color", (*col[:3], 0.7))
-            batch = batch_for_shader(shader, 'TRIS', {"pos": verts}, indices=indices)
-            batch.draw(shader)
+            _draw_aa_diamond(sx, sy, 6.0, (*col[:3], 0.7))
 
 
 # ---------------------------------------------------------------------------
