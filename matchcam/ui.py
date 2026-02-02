@@ -71,15 +71,21 @@ class MATCHCAM_PT_main(bpy.types.Panel):
         row.label(text="VP1")
         row.prop(props, "vp1_axis", expand=True)
         row = box.row(align=True)
-        row.label(text="VP2")
+        row.label(text="Up" if props.mode == '1VP' else "VP2")
         row.prop(props, "vp2_axis", expand=True)
 
         # Warn if same axis
         if props.vp1_axis == props.vp2_axis:
-            box.label(text="VP axes must differ!", icon='ERROR')
+            warn_row = box.row()
+            warn_row.alert = True
+            warn_row.label(text="VP axes must differ!", icon='ERROR')
+
+        # Focal length (1VP only)
+        if props.mode == '1VP':
+            box.prop(props, "focal_length_1vp")
 
         # Optical centre + Reference distance (same box)
-        if props.mode == '2VP':
+        if props.mode in ('1VP', '2VP'):
             box.prop(props, "use_custom_pp", text="Custom Optical Center")
             if props.use_custom_pp:
                 row = box.row()
@@ -132,6 +138,8 @@ class MATCHCAM_PT_main(bpy.types.Panel):
             row.alert = True
             if props.mode == '3VP':
                 row.label(text="Adjust VP1/VP2/VP3 lines to converge")
+            elif props.mode == '1VP':
+                row.label(text="Adjust VP1 lines to converge")
             else:
                 row.label(text="Adjust VP1/VP2 lines to converge")
         else:

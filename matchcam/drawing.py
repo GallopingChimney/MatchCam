@@ -47,6 +47,11 @@ COL_PP = (1.0, 1.0, 1.0, 0.9)           # white for principal point
 COL_PP_HOVER = (1.0, 1.0, 1.0, 1.0)
 COL_PP_CROSSHAIR = (1.0, 1.0, 1.0, 0.5)
 
+COL_HORIZON_LINE = (0.7, 0.85, 0.9, 0.5)       # light cyan
+COL_HORIZON_LINE_EXT = (0.7, 0.85, 0.9, 0.1)
+COL_HORIZON_HANDLE = (0.8, 0.9, 1.0, 1.0)
+COL_HORIZON_HANDLE_HOVER = (0.9, 0.95, 1.0, 1.0)
+
 COL_VP1_FILL = (0.95, 0.2, 0.2, 0.20)
 COL_VP2_FILL = (0.2, 0.85, 0.2, 0.20)
 COL_VP3_FILL = (0.2, 0.5, 0.95, 0.20)
@@ -330,6 +335,7 @@ def draw_callback(context):
 
     hover_idx = scene.get("_matchcam_hover_idx", -1)
     drag_idx = scene.get("_matchcam_drag_idx", -1)
+    is_1vp = (props.mode == '1VP')
     is_3vp = (props.mode == '3VP')
 
     gpu.state.blend_set('ALPHA')
@@ -361,11 +367,12 @@ def draw_callback(context):
             _pt('vp1_line2_start'), _pt('vp1_line2_end'),
             _fill_color(COL_VP1_FILL, 0),
         )
-        _draw_vp_fill(
-            _pt('vp2_line1_start'), _pt('vp2_line1_end'),
-            _pt('vp2_line2_start'), _pt('vp2_line2_end'),
-            _fill_color(COL_VP2_FILL, 1),
-        )
+        if not is_1vp:
+            _draw_vp_fill(
+                _pt('vp2_line1_start'), _pt('vp2_line1_end'),
+                _pt('vp2_line2_start'), _pt('vp2_line2_end'),
+                _fill_color(COL_VP2_FILL, 1),
+            )
         if is_3vp:
             _draw_vp_fill(
                 _pt('vp3_line1_start'), _pt('vp3_line1_end'),
@@ -380,12 +387,24 @@ def draw_callback(context):
         COL_VP1_LINE, COL_VP1_LINE_EXT,
     )
 
-    # --- Draw VP2 lines ---
-    _draw_aa_line_pair(
-        _pt('vp2_line1_start'), _pt('vp2_line1_end'),
-        _pt('vp2_line2_start'), _pt('vp2_line2_end'),
-        COL_VP2_LINE, COL_VP2_LINE_EXT,
-    )
+    # --- Draw VP2 lines (skip in 1VP) ---
+    if not is_1vp:
+        _draw_aa_line_pair(
+            _pt('vp2_line1_start'), _pt('vp2_line1_end'),
+            _pt('vp2_line2_start'), _pt('vp2_line2_end'),
+            COL_VP2_LINE, COL_VP2_LINE_EXT,
+        )
+
+    # --- Draw horizon line (1VP only) ---
+    if is_1vp:
+        hs, he = _pt('horizon_start'), _pt('horizon_end')
+        _draw_aa_line(hs, he, COL_HORIZON_LINE)
+        ext_t = (COL_HORIZON_LINE_EXT[0], COL_HORIZON_LINE_EXT[1],
+                 COL_HORIZON_LINE_EXT[2], 0.0)
+        def _ext(a, b, factor=1.5):
+            return (b[0] + (b[0] - a[0]) * factor, b[1] + (b[1] - a[1]) * factor)
+        _draw_aa_line(he, _ext(hs, he), COL_HORIZON_LINE_EXT, color_end=ext_t)
+        _draw_aa_line(hs, _ext(he, hs), COL_HORIZON_LINE_EXT, color_end=ext_t)
 
     # --- Draw VP3 lines (3VP mode only) ---
     if is_3vp:
@@ -403,13 +422,18 @@ def draw_callback(context):
     vp1_names = ['vp1_line1_start', 'vp1_line1_end', 'vp1_line2_start', 'vp1_line2_end']
     vp2_names = ['vp2_line1_start', 'vp2_line1_end', 'vp2_line2_start', 'vp2_line2_end']
     vp3_names = ['vp3_line1_start', 'vp3_line1_end', 'vp3_line2_start', 'vp3_line2_end']
+    horizon_names = ['horizon_start', 'horizon_end']
 
     from .properties import CONTROL_POINT_NAMES
 
-    pp_active = (props.mode == '2VP' and props.use_custom_pp)
+    pp_active = (props.mode in ('1VP', '2VP') and props.use_custom_pp)
 
     for i, name in enumerate(CONTROL_POINT_NAMES):
+        if name in vp2_names and is_1vp:
+            continue
         if name in vp3_names and not is_3vp:
+            continue
+        if name in horizon_names and not is_1vp:
             continue
         if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
             continue
@@ -425,6 +449,8 @@ def draw_callback(context):
             col = COL_VP2_HANDLE_HOVER if is_hover else COL_VP2_HANDLE
         elif name in vp3_names:
             col = COL_VP3_HANDLE_HOVER if is_hover else COL_VP3_HANDLE
+        elif name in horizon_names:
+            col = COL_HORIZON_HANDLE_HOVER if is_hover else COL_HORIZON_HANDLE
         elif name == 'origin_point':
             col = COL_ORIGIN_HOVER if is_hover else COL_ORIGIN
             # Origin: 2x radius, stroke ring only (no fill), 2px stroke
@@ -445,9 +471,9 @@ def draw_callback(context):
             _draw_aa_circle(pos[0], pos[1], radius, col)
 
     # --- Draw VP indicators ---
-    _draw_vp_indicators(props, frame, is_3vp)
+    _draw_vp_indicators(props, frame, is_1vp, is_3vp)
 
-    # --- Draw principal point indicator (2VP + custom PP only) ---
+    # --- Draw principal point indicator (1VP/2VP + custom PP only) ---
     if pp_active:
         _draw_principal_point(props, frame, hover_idx)
 
@@ -555,6 +581,8 @@ def _get_loupe_color(drag_idx):
         return COL_ORIGIN[:3]     # yellow
     elif drag_idx == 15:
         return COL_PP[:3]         # white (principal point)
+    elif 16 <= drag_idx <= 17:
+        return COL_HORIZON_LINE[:3]  # cyan (horizon)
     else:
         return COL_REF_LINE[:3]   # yellow
 
@@ -683,7 +711,7 @@ def _draw_principal_point(props, frame, hover_idx):
 # VP indicators
 # ---------------------------------------------------------------------------
 
-def _draw_vp_indicators(props, frame, is_3vp):
+def _draw_vp_indicators(props, frame, is_1vp, is_3vp):
     """Draw small diamonds at the computed vanishing point positions.
 
     Diamonds grow and brighten on hover and switch to ring+dot when dragged.
@@ -722,9 +750,12 @@ def _draw_vp_indicators(props, frame, is_3vp):
         return solv.line_intersection(ip_s1, ip_e1, ip_s2, ip_e2)
 
     fu = _vp_from_lines('vp1_line1_start', 'vp1_line1_end', 'vp1_line2_start', 'vp1_line2_end')
-    fv = _vp_from_lines('vp2_line1_start', 'vp2_line1_end', 'vp2_line2_start', 'vp2_line2_end')
 
-    vp_list = [(0, fu, COL_VP1_LINE), (1, fv, COL_VP2_LINE)]
+    vp_list = [(0, fu, COL_VP1_LINE)]
+
+    if not is_1vp:
+        fv = _vp_from_lines('vp2_line1_start', 'vp2_line1_end', 'vp2_line2_start', 'vp2_line2_end')
+        vp_list.append((1, fv, COL_VP2_LINE))
 
     if is_3vp:
         fw_vp = _vp_from_lines('vp3_line1_start', 'vp3_line1_end', 'vp3_line2_start', 'vp3_line2_end')

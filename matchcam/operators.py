@@ -24,7 +24,10 @@ from .drawing import (
     unregister_draw_handler,
     HANDLE_RADIUS,
 )
-from .properties import CONTROL_POINT_NAMES, CONTROL_POINT_DEFAULTS, VP3_POINT_NAMES
+from .properties import (
+    CONTROL_POINT_NAMES, CONTROL_POINT_DEFAULTS,
+    VP2_POINT_NAMES, VP3_POINT_NAMES, HORIZON_POINT_NAMES,
+)
 from . import solver as solv
 
 
@@ -80,40 +83,61 @@ def _run_solver(scene):
     if aspect is None:
         return
 
-    pp = (props.principal_point[0], props.principal_point[1]) if (props.use_custom_pp and props.mode == '2VP') else (0.5, 0.5)
+    pp = (props.principal_point[0], props.principal_point[1]) if (props.use_custom_pp and props.mode in ('1VP', '2VP')) else (0.5, 0.5)
 
-    # Build solver kwargs
-    solver_kwargs = dict(
-        vp1_l1_start=(props.vp1_line1_start[0], props.vp1_line1_start[1]),
-        vp1_l1_end=(props.vp1_line1_end[0], props.vp1_line1_end[1]),
-        vp1_l2_start=(props.vp1_line2_start[0], props.vp1_line2_start[1]),
-        vp1_l2_end=(props.vp1_line2_end[0], props.vp1_line2_end[1]),
-        vp2_l1_start=(props.vp2_line1_start[0], props.vp2_line1_start[1]),
-        vp2_l1_end=(props.vp2_line1_end[0], props.vp2_line1_end[1]),
-        vp2_l2_start=(props.vp2_line2_start[0], props.vp2_line2_start[1]),
-        vp2_l2_end=(props.vp2_line2_end[0], props.vp2_line2_end[1]),
-        origin=(props.origin_point[0], props.origin_point[1]),
-        vp1_axis=props.vp1_axis,
-        vp2_axis=props.vp2_axis,
-        image_aspect=aspect,
-        sensor_width=cam.data.sensor_width,
-        principal_point=pp,
-        ref_distance_enabled=props.ref_distance_enabled,
-        ref_distance=props.ref_distance,
-        ref_point_a=(props.ref_point_a[0], props.ref_point_a[1]),
-        ref_point_b=(props.ref_point_b[0], props.ref_point_b[1]),
-    )
-
-    # Add 3VP lines if in 3VP mode
-    if props.mode == '3VP':
-        solver_kwargs.update(
-            vp3_l1_start=(props.vp3_line1_start[0], props.vp3_line1_start[1]),
-            vp3_l1_end=(props.vp3_line1_end[0], props.vp3_line1_end[1]),
-            vp3_l2_start=(props.vp3_line2_start[0], props.vp3_line2_start[1]),
-            vp3_l2_end=(props.vp3_line2_end[0], props.vp3_line2_end[1]),
+    if props.mode == '1VP':
+        result = solv.solve_1vp(
+            vp1_l1_start=(props.vp1_line1_start[0], props.vp1_line1_start[1]),
+            vp1_l1_end=(props.vp1_line1_end[0], props.vp1_line1_end[1]),
+            vp1_l2_start=(props.vp1_line2_start[0], props.vp1_line2_start[1]),
+            vp1_l2_end=(props.vp1_line2_end[0], props.vp1_line2_end[1]),
+            horizon_start=(props.horizon_start[0], props.horizon_start[1]),
+            horizon_end=(props.horizon_end[0], props.horizon_end[1]),
+            origin=(props.origin_point[0], props.origin_point[1]),
+            vp1_axis=props.vp1_axis,
+            vp2_axis=props.vp2_axis,
+            image_aspect=aspect,
+            sensor_width=cam.data.sensor_width,
+            principal_point=pp,
+            focal_length_mm=props.focal_length_1vp,
+            ref_distance_enabled=props.ref_distance_enabled,
+            ref_distance=props.ref_distance,
+            ref_point_a=(props.ref_point_a[0], props.ref_point_a[1]),
+            ref_point_b=(props.ref_point_b[0], props.ref_point_b[1]),
+        )
+    else:
+        # Build solver kwargs for 2VP/3VP
+        solver_kwargs = dict(
+            vp1_l1_start=(props.vp1_line1_start[0], props.vp1_line1_start[1]),
+            vp1_l1_end=(props.vp1_line1_end[0], props.vp1_line1_end[1]),
+            vp1_l2_start=(props.vp1_line2_start[0], props.vp1_line2_start[1]),
+            vp1_l2_end=(props.vp1_line2_end[0], props.vp1_line2_end[1]),
+            vp2_l1_start=(props.vp2_line1_start[0], props.vp2_line1_start[1]),
+            vp2_l1_end=(props.vp2_line1_end[0], props.vp2_line1_end[1]),
+            vp2_l2_start=(props.vp2_line2_start[0], props.vp2_line2_start[1]),
+            vp2_l2_end=(props.vp2_line2_end[0], props.vp2_line2_end[1]),
+            origin=(props.origin_point[0], props.origin_point[1]),
+            vp1_axis=props.vp1_axis,
+            vp2_axis=props.vp2_axis,
+            image_aspect=aspect,
+            sensor_width=cam.data.sensor_width,
+            principal_point=pp,
+            ref_distance_enabled=props.ref_distance_enabled,
+            ref_distance=props.ref_distance,
+            ref_point_a=(props.ref_point_a[0], props.ref_point_a[1]),
+            ref_point_b=(props.ref_point_b[0], props.ref_point_b[1]),
         )
 
-    result = solv.solve_2vp(**solver_kwargs)
+        # Add 3VP lines if in 3VP mode
+        if props.mode == '3VP':
+            solver_kwargs.update(
+                vp3_l1_start=(props.vp3_line1_start[0], props.vp3_line1_start[1]),
+                vp3_l1_end=(props.vp3_line1_end[0], props.vp3_line1_end[1]),
+                vp3_l2_start=(props.vp3_line2_start[0], props.vp3_line2_start[1]),
+                vp3_l2_end=(props.vp3_line2_end[0], props.vp3_line2_end[1]),
+            )
+
+        result = solv.solve_2vp(**solver_kwargs)
 
     if result is None:
         # Store invalid state for UI feedback
@@ -342,10 +366,16 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                 if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
                     self._dragging = False
                     self._drag_idx = -1
+                elif name in VP2_POINT_NAMES and props.mode == '1VP':
+                    self._dragging = False
+                    self._drag_idx = -1
                 elif name in VP3_POINT_NAMES and props.mode != '3VP':
                     self._dragging = False
                     self._drag_idx = -1
-                elif name == 'principal_point' and not (props.mode == '2VP' and props.use_custom_pp):
+                elif name == 'principal_point' and not (props.mode in ('1VP', '2VP') and props.use_custom_pp):
+                    self._dragging = False
+                    self._drag_idx = -1
+                elif name in HORIZON_POINT_NAMES and props.mode != '1VP':
                     self._dragging = False
                     self._drag_idx = -1
                 else:
@@ -486,7 +516,7 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     name = CONTROL_POINT_NAMES[hit]
                     if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
                         return {'PASS_THROUGH'}
-                    if name == 'principal_point' and not (props.mode == '2VP' and props.use_custom_pp):
+                    if name == 'principal_point' and not (props.mode in ('1VP', '2VP') and props.use_custom_pp):
                         return {'PASS_THROUGH'}
 
                     self._dragging = True
@@ -654,11 +684,16 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
         best_dist = HANDLE_RADIUS + 5.0
         best_idx = -1
 
+        is_1vp = (props.mode == '1VP')
         is_3vp = (props.mode == '3VP')
-        pp_active = (props.mode == '2VP' and props.use_custom_pp)
+        pp_active = (props.mode in ('1VP', '2VP') and props.use_custom_pp)
 
         for i, name in enumerate(CONTROL_POINT_NAMES):
+            if name in VP2_POINT_NAMES and is_1vp:
+                continue
             if name in VP3_POINT_NAMES and not is_3vp:
+                continue
+            if name in HORIZON_POINT_NAMES and not is_1vp:
                 continue
             if name in ('ref_point_a', 'ref_point_b') and not props.ref_distance_enabled:
                 continue
@@ -677,8 +712,14 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
 
     def _vp_hit_test(self, props, mx, my, frame) -> int:
         """Check if mouse is near a VP diamond. Returns group (0-2) or -1."""
+        is_1vp = (props.mode == '1VP')
         is_3vp = (props.mode == '3VP')
-        groups = [0, 1] + ([2] if is_3vp else [])
+        if is_1vp:
+            groups = [0]
+        elif is_3vp:
+            groups = [0, 1, 2]
+        else:
+            groups = [0, 1]
 
         best_dist = _VP_DIAMOND_HIT_RADIUS
         best_group = -1

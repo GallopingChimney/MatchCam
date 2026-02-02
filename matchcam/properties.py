@@ -99,11 +99,12 @@ class MatchCamProperties(bpy.types.PropertyGroup):
         default=False,
     )
 
-    # Mode: 2VP or 3VP
+    # Mode: 1VP, 2VP or 3VP
     mode: EnumProperty(
         name="Mode",
         description="Number of vanishing points to use",
         items=[
+            ('1VP', "1-Point", "One vanishing point (requires manual focal length)"),
             ('2VP', "2-Point", "Two vanishing points (assumes principal point at center)"),
             ('3VP', "3-Point", "Three vanishing points (derives principal point and camera shift)"),
         ],
@@ -158,6 +159,25 @@ class MatchCamProperties(bpy.types.PropertyGroup):
         name="Origin Point", size=2, default=(0.50, 0.75),
     )
 
+    # Horizon line (1VP mode) - defines camera roll / up direction
+    horizon_start: FloatVectorProperty(
+        name="Horizon Start", size=2, default=(0.2, 0.5),
+    )
+    horizon_end: FloatVectorProperty(
+        name="Horizon End", size=2, default=(0.8, 0.5),
+    )
+
+    # Focal length for 1VP mode (user-provided)
+    focal_length_1vp: FloatProperty(
+        name="Focal Length (mm)",
+        description="Camera focal length for 1-point perspective",
+        default=50.0,
+        min=1.0,
+        soft_min=10.0,
+        soft_max=300.0,
+        update=_on_solver_property_update,
+    )
+
     # Axis assignment
     vp1_axis: EnumProperty(
         name="VP1 Axis",
@@ -168,6 +188,7 @@ class MatchCamProperties(bpy.types.PropertyGroup):
             ('Z', "Z", "Z axis"),
         ],
         default='X',
+        update=_on_solver_property_update,
     )
     vp2_axis: EnumProperty(
         name="VP2 Axis",
@@ -178,6 +199,7 @@ class MatchCamProperties(bpy.types.PropertyGroup):
             ('Z', "Z", "Z axis"),
         ],
         default='Y',
+        update=_on_solver_property_update,
     )
 
     # Reference distance
@@ -265,6 +287,7 @@ CONTROL_POINT_NAMES = [
     "origin_point",                             # 12
     "ref_point_a", "ref_point_b",              # 13, 14
     "principal_point",                          # 15
+    "horizon_start", "horizon_end",            # 16, 17
 ]
 
 # Default values for resetting (3/4 angle, horizon at bottom third)
@@ -285,10 +308,14 @@ CONTROL_POINT_DEFAULTS = {
     "ref_point_a": (0.40, 0.70),
     "ref_point_b": (0.60, 0.70),
     "principal_point": (0.5, 0.5),
+    "horizon_start": (0.2, 0.5),
+    "horizon_end": (0.8, 0.5),
 }
 
 # Names grouped by VP for drawing/interaction filtering
+VP2_POINT_NAMES = ["vp2_line1_start", "vp2_line1_end", "vp2_line2_start", "vp2_line2_end"]
 VP3_POINT_NAMES = ["vp3_line1_start", "vp3_line1_end", "vp3_line2_start", "vp3_line2_end"]
+HORIZON_POINT_NAMES = ["horizon_start", "horizon_end"]
 
 
 def register():
