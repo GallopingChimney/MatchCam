@@ -30,11 +30,12 @@ class MATCHCAM_PT_main(bpy.types.Panel):
 
         # Camera section
         box = layout.box()
-        box.label(text="Camera", icon='CAMERA_DATA')
+        box.label(text="Camera", icon='OUTLINER_DATA_CAMERA')
 
         row = box.row(align=True)
-        row.label(text="Camera:")
-        row.prop(props, "target_camera", text="")
+        split = row.split(factor=0.25, align=True)
+        split.label(text="Camera:")
+        split.prop(props, "target_camera", text="")
 
         # Warn if selected camera has an existing background image
         target = props.target_camera
@@ -46,18 +47,18 @@ class MATCHCAM_PT_main(bpy.types.Panel):
                     warn_row.alert = True
                     warn_row.label(text="Existing background will be replaced!", icon='ERROR')
 
-        row = box.row()
-        row.scale_y = 1.5
-        row.operator("matchcam.setup", icon='IMAGE_DATA')
-
         # Background opacity
         box.prop(props, "bg_alpha", slider=True)
+
+        row = box.row()
+        row.scale_y = 1.905
+        row.operator("matchcam.setup", icon='IMAGE_DATA')
 
         layout.separator()
 
         # Mode: 2VP / 3VP
         box = layout.box()
-        box.label(text="Mode", icon='OBJECT_DATA')
+        box.label(text="Mode", icon='VIEW_CAMERA')
         row = box.row(align=True)
         row.prop(props, "mode", expand=True)
 
@@ -99,7 +100,9 @@ class MATCHCAM_PT_main(bpy.types.Panel):
         layout.separator()
 
         # Reset
-        layout.operator("matchcam.reset", icon='FILE_REFRESH')
+        row = layout.row(align=True)
+        row.operator("matchcam.reset", icon='FILE_REFRESH')
+        row.operator("matchcam.reset_origin", text="", icon='OBJECT_ORIGIN')
 
         layout.separator()
 
@@ -115,14 +118,24 @@ class MATCHCAM_PT_main(bpy.types.Panel):
             row = box.row()
             row.alert = True
             row.label(text="No camera - run Setup first", icon='ERROR')
+        elif not scene.camera.data.background_images or not any(
+                bg.image for bg in scene.camera.data.background_images):
+            row = box.row()
+            row.alert = True
+            row.label(text="No background image - run Setup", icon='ERROR')
         elif not is_valid:
             row = box.row()
             row.alert = True
             row.label(text="Invalid configuration", icon='ERROR')
             row = box.row()
             row.alert = True
-            row.label(text="Adjust lines so they converge")
+            if props.mode == '3VP':
+                row.label(text="Adjust VP1/VP2/VP3 lines to converge")
+            else:
+                row.label(text="Adjust VP1/VP2 lines to converge")
         else:
+            box.label(text=f"Mode: {props.mode}")
+
             focal = scene.get('_matchcam_focal_mm', 0)
             hfov = scene.get('_matchcam_hfov', 0)
             vfov = scene.get('_matchcam_vfov', 0)

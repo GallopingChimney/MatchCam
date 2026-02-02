@@ -369,9 +369,6 @@ def draw_callback(context):
 
     pp_active = (props.mode == '2VP' and props.use_custom_pp)
 
-    # Determine if a VP handle is currently being dragged
-    is_vp_dragging = (0 <= drag_idx <= 11)
-
     for i, name in enumerate(CONTROL_POINT_NAMES):
         if name in vp3_names and not is_3vp:
             continue
@@ -382,7 +379,6 @@ def draw_callback(context):
 
         pos = _pt(name)
         is_hover = (i == hover_idx)
-        is_vp_handle = name in vp1_names or name in vp2_names or name in vp3_names
 
         if name in vp1_names:
             col = COL_VP1_HANDLE_HOVER if is_hover else COL_VP1_HANDLE
@@ -401,10 +397,9 @@ def draw_callback(context):
 
         radius = HANDLE_HOVER_RADIUS if is_hover else HANDLE_RADIUS
 
-        if is_vp_handle and is_vp_dragging:
-            # Ring style (no fill, just border) matching origin handle,
-            # with a small center dot, retaining axis colors
-            ring_r = HANDLE_HOVER_RADIUS * 2 if (i == drag_idx) else HANDLE_RADIUS * 2
+        if i == drag_idx:
+            # The actively dragged VP handle: ring style with center dot
+            ring_r = HANDLE_HOVER_RADIUS * 2
             _draw_aa_annulus(pos[0], pos[1], ring_r - 1.0, ring_r + 1.0, col, segments=32)
             _draw_aa_circle(pos[0], pos[1], 2.0, col, segments=12)
         else:

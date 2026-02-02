@@ -231,9 +231,10 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     else:
                         nx, ny = screen_to_normalized(mx, my, frame)
 
-                    # Clamp to 0-1
-                    nx = max(0.0, min(1.0, nx))
-                    ny = max(0.0, min(1.0, ny))
+                    # Clamp to 0-1 (except origin_point which can go outside frame)
+                    if name != 'origin_point':
+                        nx = max(0.0, min(1.0, nx))
+                        ny = max(0.0, min(1.0, ny))
 
                     # Ctrl+drag: constrain to horizontal or vertical
                     if event.ctrl:
@@ -288,6 +289,9 @@ class MATCHCAM_OT_interact(bpy.types.Operator):
                     self._drag_start_value = (val[0], val[1])
                     self._drag_start_screen = (mx, my)
                     self._last_mouse_screen = (mx, my)
+                    # Set drag_idx immediately so drawing shows ring style on click
+                    scene["_matchcam_drag_idx"] = hit
+                    self._tag_redraw(context)
                     return {'RUNNING_MODAL'}
                 return {'PASS_THROUGH'}
 
@@ -529,6 +533,22 @@ class MATCHCAM_OT_reset(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class MATCHCAM_OT_reset_origin(bpy.types.Operator):
+    """Reset origin point to default position (image center bottom)"""
+    bl_idname = "matchcam.reset_origin"
+    bl_label = "Reset Origin Point"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        props = context.scene.matchcam
+        setattr(props, 'origin_point', CONTROL_POINT_DEFAULTS['origin_point'])
+
+        if props.enabled:
+            _run_solver(context.scene)
+
+        return {'FINISHED'}
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -538,6 +558,7 @@ classes = (
     MATCHCAM_OT_enable,
     MATCHCAM_OT_setup,
     MATCHCAM_OT_reset,
+    MATCHCAM_OT_reset_origin,
 )
 
 
