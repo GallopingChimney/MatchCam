@@ -10,7 +10,7 @@ __pycache__/
 *.pyo
 
 # Distribution archives
-*.zip
+
 
 # Old build archives
 Archive/
